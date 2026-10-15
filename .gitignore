@@ -1,0 +1,16 @@
+# env / secrets
+.env
+deploy/.env
+
+# 运行产物
+*.db
+out/
+dist/
+node_modules/
+
+# 二进制
+*.exe
+/tmp/
+
+# 本地
+.DS_Store

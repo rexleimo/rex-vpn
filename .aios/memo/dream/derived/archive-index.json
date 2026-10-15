@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "kind": "memo.dream-archive-index",
+  "builtAt": "2026-10-15T02:46:16.125Z",
+  "sourceToken": {
+    "schemaVersion": 2,
+    "governance": {
+      "exists": false,
+      "size": 0,
+      "mtimeMs": 0,
+      "ctimeMs": 0,
+      "contentDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "proposals": {
+      "exists": false,
+      "fileCount": 0,
+      "files": [],
+      "contentDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "archivedEventIds": []
+}

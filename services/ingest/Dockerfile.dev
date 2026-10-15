@@ -1,0 +1,6 @@
+# vpn-master / ingest (开发镜像: air 热重载, 源码由 dev compose 挂载到 /src)
+FROM golang:1.23-alpine
+RUN go install github.com/air-verse/air@v1.52.0
+WORKDIR /src
+COPY .air.toml .air.toml
+CMD ["air"]

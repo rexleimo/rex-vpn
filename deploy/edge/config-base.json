@@ -1,0 +1,33 @@
+{
+  "api": {
+    "tag": "api",
+    "services": ["Handler", "Stats", "Routing"]
+  },
+  "inbounds": [
+    {
+      "tag": "in_edge_ws",
+      "listen": "0.0.0.0",
+      "port": 10086,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          { "id": "00000000-0000-4000-8000-000000000001", "flow": "" }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": { "path": "/edge-ws" }
+      }
+    }
+  ],
+  "outbounds": [
+    { "tag": "direct", "protocol": "freedom" }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [{ "type": "field", "outboundTag": "direct", "network": "tcp,udp" }]
+  },
+  "stats": {},
+  "log": { "access": "", "error": "", "loglevel": "warning" }
+}

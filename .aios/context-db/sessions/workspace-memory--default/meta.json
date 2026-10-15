@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "sessionId": "workspace-memory--default",
+  "agent": "workspace-memory",
+  "project": "vpn-master",
+  "goal": "Workspace memory space \"default\"",
+  "tags": [
+    "space:default"
+  ],
+  "status": "running",
+  "createdAt": "2026-10-15T05:14:56.425Z",
+  "updatedAt": "2026-10-15T05:14:56.425Z"
+}

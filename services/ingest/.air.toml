@@ -1,0 +1,12 @@
+# air 热重载配置 (容器内工作目录 /src = 挂载的 services/ingest)
+root = "."
+build_cmd = "go build -o /tmp/ingest-bin ./cmd/ingest"
+main_file = "cmd/ingest/main.go"
+custom_bin = "/tmp/ingest-bin"
+
+[log]
+  time = true
+
+[watch]
+  include = ["*.go", "go.mod", ".air.toml"]
+  exclude = ["testdata"]
