@@ -7,7 +7,10 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/postgres v1.6.3
 	gorm.io/gorm v1.31.2
+	vpnmaster/webui v0.0.0
 )
+
+replace vpnmaster/webui => ../webui
 
 require (
 	github.com/dustin/go-humanize v1.1.0 // indirect

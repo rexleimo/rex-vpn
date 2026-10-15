@@ -12,7 +12,7 @@ import (
 	"vpnmaster/ingest/internal/out"
 	"vpnmaster/ingest/internal/probe"
 	"vpnmaster/ingest/internal/sub"
-	"vpnmaster/ingest/pkg/webui"
+	"vpnmaster/webui"
 )
 // Handler 是 ingest 内嵌的 web 层(SSR 管理页 + JSON API, work-7)。
 // 不做前后分离: 页面服务端渲染, vanilla JS 只做 5s 轮询刷新表格(7.3)。
