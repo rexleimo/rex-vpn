@@ -100,7 +100,7 @@ ledger: {
     "wc-1..6 完成: user-center Go SSR 单二进制(登录/概览/订阅/购买 4 页 + JSON 轮询), 共享模块 vpnmaster/webui(ComponentsTemplate + CSS/组件), Marzban client 接口化(真实 HTTP + Mock + Disabled 桩), go-qrcode 服务端出图, 会话(HttpOnly+SameSite=Lax, 30s 缓存), 登录限流(10/min/IP) + CSP/安全头, compose 服务+Dockerfile(context=services/ 含 webui) 已落地; 单测 4页 200/未登录 302/限流/CSP/token不渲染 全绿",
     "模板引擎: htmlx 不可获取, 回退 stdlib html/template+go:embed(同 ingest §0 风险预案), 渲染层隔离在 vpnmaster/webui",
     "user-center 改为 Go SSR 单二进制(无前后分离/无 Node), 决策记录: 本文件 §0",
-    "外部前置 work-6.2/6.5 定 Marzban API 契约; wc-6.2 真实 token e2e 与 wc-7.2 观察项待联调"
+    "外部前置 work-6.1/6.2/6.5 已本地验证并完成: user-center 客户端已按实测契约改写(admin token 登录/GET /api/user/{username}/sub token 本地解码/UA 选订阅格式)并对真实 Marzban 端到端联调通过(登录→概览→订阅+二维码 全绿), 契约记录 docs/marzban-checklist.md; 剩 wc-6.2 真实 token e2e 脚本化(并入 work-8) 与 wc-7.2 观察项"
   ],
   done: [ "wc-1", "wc-2", "wc-3", "wc-4", "wc-5", "wc-6", "wc-7.1" ],
   assignment: { wc-6.2: implementer /* 并入 work-8 */, wc-7.2: implementer }

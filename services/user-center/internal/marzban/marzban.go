@@ -1,17 +1,27 @@
 // Package marzban 是 user-center 的数据层: 服务端代理 Marzban API, 不建用户数据后端。
 // 接口化以便单测 mock(wc-1.3 验收: 单测不依赖真实 Marzban)。
-// 真实字段/端点以 work-6.5 冒烟契约为准, 契约漂移只改 httpClient。
+//
+// 契约(经 work-6.1/6.2 本地 Marzban 0.44+ 实测, 见 docs/marzban-checklist.md):
+//   - admin 鉴权: POST /api/admin/token (form: username/password) → access_token(JWT), 无 /api/login
+//   - 用户查询:   GET /api/user/{username} (单数, 非 /api/users?token=)
+//   - 订阅 token: /sub/{base64url(username)+10位hmac}, 本地可解码出 username; 由运营发给用户
+//   - 订阅内容:   GET /sub/{token}, 按 User-Agent 选格式(clash-verge/stash → Clash YAML)
+//   - 用户字段:   expire(天) / data_limit(字节) / used_traffic; 创建用户需 proxies, 建议显式绑 inbounds
+//   - 发票:       本版本无 invoice API → 购买页 MVP 仅"联系渠道加量"(与 plan §0 决策一致)
 package marzban
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -19,33 +29,36 @@ import (
 type User struct {
 	ID           int64
 	Username     string
-	Status       string // "active" | "banned"
-	ExpireTime   int64  // unix, 0=无限期
+	Status       string // "active" | "banned" | "expired"
+	ExpireDays   int    // 套餐时长(天), 0=不限时
 	LimitTraffic int64  // 字节配额, 0=不限量
 	UsedTraffic  int64  // 已用字节
 	Online       bool
 }
 
-// Invoice 是 Marzban 发票/订单。
+// Invoice 是 Marzban 发票/订单(预留: 当前版本 API 未提供, 接口保留供 Phase 2)。
 type Invoice struct {
 	ID        int64
 	PlanName  string
-	Amount    int64  // 最小货币单位
-	Status    string // "pending" | "paid"
-	CreatedAt int64  // unix
+	Amount    int64
+	Status    string
+	CreatedAt int64
 }
 
-// Client 是数据层抽象。MVP 仅读用户/订阅/发票; 购买走 CreateInvoice。
+// ErrNotSupported 表示当前 Marzban 版本无该能力(如发票)。
+var ErrNotSupported = errors.New("marzban: not supported in this version")
+
+// Client 是数据层抽象。MVP: 只读用户/订阅 + 发票接口(暂 NotImplemented)。
 type Client interface {
 	// GetUserByToken 按订阅 token 解析用户; token 无效/不存在返回 ErrNotFound。
 	GetUserByToken(ctx context.Context, token string) (User, error)
 	// SubURL 返回订阅链接(Clash YAML sub), 供复制/二维码。
 	SubURL(token string) string
-	// SubContent 拉取订阅原始内容(Clash YAML), 供服务端渲染。
-	SubContent(ctx context.Context, token string) (string, error)
-	// CreateInvoice 建订单(Marzban 侧), 到账由 Marzban 处理。
+	// SubContent 拉取订阅原始内容(按 UA 选格式, 默认 Clash YAML)。
+	SubContent(ctx context.Context, token, userAgent string) (string, error)
+	// CreateInvoice 建订单(Marzban invoice API); 当前版本不支持 → ErrNotSupported。
 	CreateInvoice(ctx context.Context, token, plan string) (Invoice, error)
-	// ListInvoices 订单历史。
+	// ListInvoices 订单历史; 当前版本不支持 → 空列表。
 	ListInvoices(ctx context.Context, token string) ([]Invoice, error)
 }
 
@@ -87,26 +100,6 @@ func PlansFromEnv() []Plan {
 	return def
 }
 
-// Disabled 是一个返回 ErrNotFound 的桩 client, 供 Marzban 未配置/未联调时使用(避免 nil 接口 panic)。
-type disabled struct{}
-
-func (disabled) GetUserByToken(ctx context.Context, token string) (User, error) {
-	return User{}, ErrNotFound
-}
-func (disabled) SubURL(token string) string { return "" }
-func (disabled) SubContent(ctx context.Context, token string) (string, error) {
-	return "", ErrNotFound
-}
-func (disabled) CreateInvoice(ctx context.Context, token, plan string) (Invoice, error) {
-	return Invoice{}, ErrNotFound
-}
-func (disabled) ListInvoices(ctx context.Context, token string) ([]Invoice, error) {
-	return nil, ErrNotFound
-}
-
-// Disabled 返回禁用桩。
-func Disabled() Client { return disabled{} }
-
 // NewHTTP 从 env 构造真实 HTTP client; MARZBAN_API_BASE 未配置返回 nil。
 func NewHTTP() Client {
 	base := strings.TrimRight(os.Getenv("MARZBAN_API_BASE"), "/")
@@ -114,61 +107,151 @@ func NewHTTP() Client {
 		return nil
 	}
 	return &httpClient{
-		apiBase: base,
-		subBase: strings.TrimRight(os.Getenv("MARZBAN_SUB_BASE"), "/"),
-		http:    &http.Client{Timeout: 20 * time.Second},
+		base:      base,
+		adminU:    os.Getenv("MARZBAN_ADMIN_USER"),
+		adminP:    os.Getenv("MARZBAN_ADMIN_PASSWORD"),
+		http:      &http.Client{Timeout: 20 * time.Second},
+		subUA:     os.Getenv("MARZBAN_SUB_UA"),
 	}
+}
+
+// decodeSubToken 本地解码 Marzban 订阅 token → username。
+// 格式: base64url("username,\"+ceil(now)\", altchars=-_, 无 padding) + 10 位 HMAC(前缀)。
+// HMAC 无法本地校验(密钥在 Marzban jwt 表), 由后续 /sub 拉取 + /api/user 查询兜底。
+func decodeSubToken(token string) (string, error) {
+	if len(token) < 11 {
+		return "", ErrNotFound
+	}
+	payload := token[:len(token)-10]
+	b, err := base64.RawURLEncoding.DecodeString(payload)
+	if err != nil {
+		return "", ErrNotFound
+	}
+	// payload = "username,timestamp", 取首段
+	username := strings.TrimSpace(strings.Split(string(b), ",")[0])
+	if username == "" {
+		return "", ErrNotFound
+	}
+	return username, nil
 }
 
 type httpClient struct {
-	apiBase string
-	subBase string
-	http    *http.Client
+	base   string
+	adminU string
+	adminP string
+	http   *http.Client
+	subUA  string // 拉订阅用的 UA(默认 clash-verge → Clash YAML)
+
+	mu      sync.Mutex
+	token   string
+	tokenAt time.Time
 }
 
+// SubURL 返回订阅链接(走 API 同源; 线上由 Dokploy 反代对外)。
 func (c *httpClient) SubURL(token string) string {
-	if c.subBase != "" {
-		return fmt.Sprintf("%s/sub/%s", c.subBase, token)
+	return fmt.Sprintf("%s/sub/%s", c.base, token)
+}
+
+// adminToken 登录(POST /api/admin/token, form 编码) + 23h 缓存。
+func (c *httpClient) adminToken(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.token != "" && time.Since(c.tokenAt) < 23*time.Hour {
+		return c.token, nil
 	}
-	return fmt.Sprintf("%s/sub/%s", c.apiBase, token)
-}
-
-// marzbanUser 是 Marzban /api/users 响应的字段子集(字段名随版本, 尽力解析)。
-type marzbanUser struct {
-	ID           int64  `json:"id"`
-	Username     string `json:"username"`
-	Status       string `json:"status"`
-	ExpireTime   int64  `json:"expire_time"`
-	LimitTraffic int64  `json:"limit_traffic"`
-	UsedTraffic  int64  `json:"used_traffic"`
-	Online       bool   `json:"online"`
-}
-
-func (c *httpClient) GetUserByToken(ctx context.Context, token string) (User, error) {
-	// Marzban 用户按 token 解析: 端点以 work-6.5 冒烟契约为准, MVP 走 /api/users?token=。
-	u, err := getJSON[marzbanUser](c, ctx, c.apiBase+"/api/users?token="+url.QueryEscape(token))
+	if c.adminU == "" || c.adminP == "" {
+		return "", fmt.Errorf("MARZBAN_ADMIN_USER/MARZBAN_ADMIN_PASSWORD 未配置")
+	}
+	form := url.Values{"username": {c.adminU}, "password": {c.adminP}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+"/api/admin/token", strings.NewReader(form.Encode()))
 	if err != nil {
-		if errorsIsNotFound(err) {
-			return User{}, ErrNotFound
-		}
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("marzban /api/admin/token: %s", resp.Status)
+	}
+	var j struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&j); err != nil {
+		return "", err
+	}
+	if j.AccessToken == "" {
+		return "", fmt.Errorf("marzban login: empty access_token")
+	}
+	c.token = j.AccessToken
+	c.tokenAt = time.Now()
+	return c.token, nil
+}
+
+// marzbanUser 是 GET /api/user/{username} 响应字段子集(work-6.2 实测)。
+type marzbanUser struct {
+	ID          int64  `json:"id"`
+	Username    string `json:"username"`
+	Status      string `json:"status"`
+	Expire      int    `json:"expire"` // 天, null=不限时
+	DataLimit   int64  `json:"data_limit"`
+	UsedTraffic int64  `json:"used_traffic"`
+	OnlineAt    string `json:"online_at"`
+}
+
+// GetUserByToken: 本地解码 token → username, 再经 admin API 查用户。
+func (c *httpClient) GetUserByToken(ctx context.Context, token string) (User, error) {
+	username, err := decodeSubToken(token)
+	if err != nil {
 		return User{}, err
 	}
-	if u.ID == 0 && u.Username == "" {
+	adm, err := c.adminToken(ctx)
+	if err != nil {
+		return User{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/api/user/"+url.PathEscape(username), nil)
+	if err != nil {
+		return User{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+adm)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return User{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
 		return User{}, ErrNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return User{}, fmt.Errorf("marzban /api/user/%s: %s", username, resp.Status)
+	}
+	var u marzbanUser
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&u); err != nil {
+		return User{}, err
 	}
 	return User{
 		ID: u.ID, Username: u.Username, Status: u.Status,
-		ExpireTime: u.ExpireTime, LimitTraffic: u.LimitTraffic,
-		UsedTraffic: u.UsedTraffic, Online: u.Online,
+		ExpireDays: u.Expire, LimitTraffic: u.DataLimit, UsedTraffic: u.UsedTraffic,
+		Online: u.OnlineAt != "" && u.OnlineAt != "null",
 	}, nil
 }
 
-func (c *httpClient) SubContent(ctx context.Context, token string) (string, error) {
-	// /sub/{token} 直接返回订阅内容(Clash YAML 或链接列表)。
+// SubContent 拉订阅内容; UA 默认 clash-verge(Clash YAML), 可用 MARZBAN_SUB_UA 覆盖。
+func (c *httpClient) SubContent(ctx context.Context, token, userAgent string) (string, error) {
+	ua := userAgent
+	if ua == "" {
+		ua = c.subUA
+	}
+	if ua == "" {
+		ua = "clash-verge/1.0"
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.SubURL(token), nil)
 	if err != nil {
 		return "", err
 	}
+	req.Header.Set("User-Agent", ua)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return "", err
@@ -187,103 +270,33 @@ func (c *httpClient) SubContent(ctx context.Context, token string) (string, erro
 	return string(b), nil
 }
 
-type marzbanInvoice struct {
-	ID        int64  `json:"id"`
-	PlanName  string `json:"plan_name"`
-	Amount    int64  `json:"amount"`
-	Status    string `json:"status"`
-	CreatedAt int64  `json:"created_at"`
-}
-
+// CreateInvoice: 当前版本 Marzban 无 invoice API(MVP 购买=联系渠道加量)。
 func (c *httpClient) CreateInvoice(ctx context.Context, token, plan string) (Invoice, error) {
-	// POST /api/invoices {token, plan}; 契约以 work-6 为准。
-	body, _ := json.Marshal(map[string]string{"token": token, "plan": plan})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.apiBase+"/api/invoices", strings.NewReader(string(body)))
-	if err != nil {
-		return Invoice{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return Invoice{}, err
-	}
-	defer resp.Body.Close()
-	var inv marzbanInvoice
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&inv); err != nil {
-		return Invoice{}, err
-	}
-	return toInvoice(inv), nil
+	return Invoice{}, ErrNotSupported
 }
 
+// ListInvoices: 当前版本无 invoice API, 返回空列表。
 func (c *httpClient) ListInvoices(ctx context.Context, token string) ([]Invoice, error) {
-	items, err := getJSONSlice[marzbanInvoice](c, ctx, c.apiBase+"/api/invoices?token="+url.QueryEscape(token))
-	if err != nil {
-		return nil, err
-	}
-	out := make([]Invoice, 0, len(items))
-	for _, i := range items {
-		out = append(out, toInvoice(i))
-	}
-	return out, nil
+	return nil, nil
 }
 
-func toInvoice(m marzbanInvoice) Invoice {
-	return Invoice{ID: m.ID, PlanName: m.PlanName, Amount: m.Amount, Status: m.Status, CreatedAt: m.CreatedAt}
+// Disabled 是返回 ErrNotFound 的桩 client, 供 Marzban 未配置/未联调时使用(避免 nil 接口 panic)。
+type disabled struct{}
+
+func (disabled) GetUserByToken(ctx context.Context, token string) (User, error) {
+	return User{}, ErrNotFound
+}
+func (disabled) SubURL(token string) string { return "" }
+func (disabled) SubContent(ctx context.Context, token, userAgent string) (string, error) {
+	return "", ErrNotFound
+}
+func (disabled) CreateInvoice(ctx context.Context, token, plan string) (Invoice, error) {
+	return Invoice{}, ErrNotSupported
+}
+func (disabled) ListInvoices(ctx context.Context, token string) ([]Invoice, error) {
+	return nil, nil
 }
 
-// getJSON GET 一个对象并反序列化; 404 → ErrNotFound。
-func getJSON[T any](c *httpClient, ctx context.Context, rawURL string) (T, error) {
-	var out T
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return out, err
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return out, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return out, ErrNotFound
-	}
-	if resp.StatusCode != http.StatusOK {
-		return out, fmt.Errorf("marzban: %s: %s", rawURL, resp.Status)
-	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&out); err != nil {
-		return out, err
-	}
-	return out, nil
-}
+// Disabled 返回禁用桩。
+func Disabled() Client { return disabled{} }
 
-func getJSONSlice[T any](c *httpClient, ctx context.Context, rawURL string) ([]T, error) {
-	// Marzban 列表可能直接是数组或 {data: [...]} 包壳, 两种都兼容。
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		return nil, ErrNotFound
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("marzban: %s: %s", rawURL, resp.Status)
-	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	var direct []T
-	if err := json.Unmarshal(body, &direct); err == nil && len(direct) > 0 {
-		return direct, nil
-	}
-	var wrap struct {
-		Data []T `json:"data"`
-	}
-	if err := json.Unmarshal(body, &wrap); err != nil {
-		return nil, err
-	}
-	return wrap.Data, nil
-}
-
-func errorsIsNotFound(err error) bool { return err == ErrNotFound }

@@ -17,7 +17,7 @@ func NewMock() *Mock {
 		Users: map[string]User{
 			"test-token": {
 				ID: 1, Username: "tester", Status: "active",
-				ExpireTime: 1_800_000_000, LimitTraffic: 50 << 30,
+				ExpireDays: 30, LimitTraffic: 50 << 30,
 				UsedTraffic: 10 << 30, Online: true,
 			},
 		},
@@ -41,7 +41,7 @@ func (m *Mock) SubURL(token string) string {
 	return "https://marzban.example/sub/" + token
 }
 
-func (m *Mock) SubContent(ctx context.Context, token string) (string, error) {
+func (m *Mock) SubContent(ctx context.Context, token, userAgent string) (string, error) {
 	if s, ok := m.Subs[token]; ok {
 		return s, nil
 	}

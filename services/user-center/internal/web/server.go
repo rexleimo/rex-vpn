@@ -148,7 +148,7 @@ func (s *Server) userFor(ctx context.Context, r *http.Request) (marzban.User, bo
 func (s *Server) auth(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		u, _, err := s.userFor(r.Context(), r)
-		if err != nil || u.ID == 0 {
+		if err != nil || u.Username == "" {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
@@ -196,7 +196,7 @@ func (s *Server) loginPost(w http.ResponseWriter, r *http.Request) {
 	}
 	token := r.FormValue("token")
 	u, err := s.Marzban.GetUserByToken(r.Context(), token)
-	if err != nil || u.ID == 0 {
+	if err != nil || u.Username == "" {
 		http.Redirect(w, r, "/login?err=token无效", http.StatusSeeOther)
 		return
 	}
@@ -235,7 +235,7 @@ func (s *Server) dashboard(w http.ResponseWriter, r *http.Request) {
 			d.QuotaPct = 100
 		}
 	}
-	d.ExpireStr = fmtExpire(u.ExpireTime)
+	d.ExpireStr = fmtExpireDays(u.ExpireDays)
 	s.page(w, Page{Title: "概览", Active: "dashboard", Content: "pageDashboard", PageData: d})
 }
 
@@ -305,12 +305,12 @@ func (s *Server) apiStatus(w http.ResponseWriter, r *http.Request) {
 	u := userFrom(r)
 	// 刷新缓存: 轮询直接取最近一次 userFor 结果; 超过 30s 重新解析
 	fresh, _, _ := s.userFor(r.Context(), r)
-	if fresh.ID != 0 {
+	if fresh.Username != "" {
 		u = fresh
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"username": u.Username, "status": u.Status, "online": u.Online,
-		"expire": fmtExpire(u.ExpireTime),
+		"expire": fmtExpireDays(u.ExpireDays),
 		"used":   humanBytes(u.UsedTraffic), "limit": humanBytes(u.LimitTraffic),
 	})
 }
@@ -462,11 +462,11 @@ func humanBytes(b int64) string {
 	return fmt.Sprintf("%.1f %ciB", f, "KMGTPE"[i-1])
 }
 
-func fmtExpire(unix int64) string {
-	if unix <= 0 {
-		return "无限期"
+func fmtExpireDays(days int) string {
+	if days <= 0 {
+		return "不限时"
 	}
-	return time.Unix(unix, 0).Format("2006-01-02 15:04")
+	return fmt.Sprintf("%d 天", days)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
