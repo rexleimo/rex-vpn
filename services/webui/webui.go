@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 //go:embed components.html app.css
@@ -65,6 +66,18 @@ func ComponentsTemplate(extra ...string) (*template.Template, error) {
 				}
 			}
 			return m
+		},
+		"div64": func(a, b int64) int64 { // 整除(向下取整), 供模板做单位换算
+			if b == 0 {
+				return 0
+			}
+			return a / b
+		},
+		"timefmt": func(unix int64, layout string) string {
+			if unix <= 0 {
+				return ""
+			}
+			return time.Unix(unix, 0).Format(layout)
 		},
 	}).Parse(src)
 }

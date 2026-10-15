@@ -43,20 +43,38 @@ services:
       - xray-edge-config:/configs   # ingest 写, xray-edge 读
     restart: on-failure
 
-  # ---------- ingest 聚合服务 (Go 自建: 拉取/解析/探测/剔除/写 xray-edge 配置)
+  # ---------- ingest 聚合服务 (Go 自建: 拉取/解析/探测/剔除/写 xray-edge 配置) ----------
   # 注意: ingest 二进制同时服务 /admin/* SSR 管理页 + /api/* (不做前后分离, 见 work-7)
-  # 首次开发前可注释; 构建自 services/ingest
-  # ingest:
-  #   build: ../../services/ingest
-  #   volumes: [ingest-data:/data, xray-edge-config:/configs]
-  #   env_file: .env
+  # build context = services/ (含共享模块 webui)
+  ingest:
+    build:
+      context: ../../services
+      dockerfile: ingest/Dockerfile
+    volumes:
+      - ingest-data:/data
+      - xray-edge-config:/configs   # ingest 写, xray-edge 读
+    env_file: .env
+    environment:
+      INGEST_API_ADDR: :9100
+      DB_PATH: /data/ingest.db
+      EDGE_CONFIG_PATH: /configs/config.json
+    ports: ["9100:9100"]
+    restart: on-failure
 
-  # ---------- user-center (终端用户自助门户, Go SSR 单容器, 见 plan-user-center.md)
-  # user-center:
-  #   build: ../../services/user-center
-  #   env_file: .env   # MARZBAN_API_BASE 等
+  # ---------- user-center (终端用户自助门户, Go SSR 单容器, 见 plan-user-center.md) ----------
+  user-center:
+    build:
+      context: ../../services
+      dockerfile: user-center/Dockerfile
+    env_file: .env
+    environment:
+      USERCENTER_ADDR: :9200
+      # MARZBAN_API_BASE: http://marzban:8080   # work-6 联调后启用
+      # USERCENTER_SECURE_COOKIES: "1"           # Dokploy HTTPS 反代后置 1
+    ports: ["9200:9200"]   # 对外域名 user.<domain> 由 Dokploy 反代接管
+    restart: on-failure
 
 volumes:
   postgres-data:
   xray-edge-config:
-  # ingest-data:
+  ingest-data:

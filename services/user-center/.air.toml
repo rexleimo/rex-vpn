@@ -1,0 +1,12 @@
+# air 热重载配置 (容器内工作目录 /src = 挂载的 services/user-center, 共享模块 /webui)
+root = "."
+build_cmd = "go build -o /tmp/uc-bin ./cmd/user-center"
+main_file = "cmd/user-center/main.go"
+custom_bin = "/tmp/uc-bin"
+
+[log]
+  time = true
+
+[watch]
+  include = ["*.go", "go.mod", ".air.toml"]
+  exclude = ["testdata"]

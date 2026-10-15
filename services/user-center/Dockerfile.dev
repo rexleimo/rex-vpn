@@ -1,0 +1,11 @@
+# vpn-master / user-center (开发镜像: air 热重载, 源码由 dev compose 挂载到 /src, 共享模块 /webui)
+# build context = 仓库 services/ 目录。
+FROM golang:1.26-alpine
+RUN go install github.com/air-verse/air@v1.52.0
+WORKDIR /src
+COPY user-center/.air.toml .air.toml
+COPY webui/go.mod ./webui/go.mod
+COPY user-center/go.mod ./user-center/go.mod
+COPY user-center/go.sum ./user-center/go.sum
+RUN cd user-center && go mod download || true
+CMD ["air"]

@@ -14,11 +14,12 @@ services:
 
   ingest:
     build:
-      context: ../../services/ingest
-      dockerfile: Dockerfile.dev   # air 热重载
+      context: ../../services
+      dockerfile: ingest/Dockerfile.dev   # air 热重载
     command: ["air"]
     volumes:
       - ../../services/ingest:/src
+      - ../../services/webui:/webui   # 共享模块 (replace ../webui → /webui)
       - ingest-data:/data
       - xray-edge-config:/configs
     ports: ["9100:9100"]   # ingest API 调试
@@ -27,8 +28,21 @@ services:
       XRAY_CONFIG: /configs/config.json
       DB_PATH: /data/ingest.db
 
+  user-center:
+    build:
+      context: ../../services
+      dockerfile: user-center/Dockerfile.dev   # air 热重载
+    command: ["air"]
+    volumes:
+      - ../../services/user-center:/src
+      - ../../services/webui:/webui
+    ports: ["9200:9200"]   # user-center 调试
+    environment:
+      USERCENTER_ADDR: :9200
+      # MARZBAN_API_BASE: http://marzban:8080   # work-6 联调后启用
+
   dev-shell:
-    image: golang:1.24
+    image: golang:1.26
     working_dir: /src
     volumes:
       - ..:/src        # 整个 repo 挂进
