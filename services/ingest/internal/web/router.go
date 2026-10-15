@@ -100,7 +100,7 @@ type UsersData struct {
 
 // NewHandler 构造并解析模板。
 func NewHandler(store *db.Store, poller *sub.Poller, prober *probe.Prober, syncer *out.Syncer, mz *MarzbanClient, sess *Session) (*Handler, error) {
-	t, err := webui.BaseTemplate(pageTemplates)
+	t, err := webui.ComponentsTemplate(adminLayout, pageTemplates)
 	if err != nil {
 		return nil, err
 	}

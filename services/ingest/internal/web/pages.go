@@ -1,5 +1,42 @@
 package web
 
+// adminLayout 是 ingest 管理页的 layout(导航/壳/按 Content 分发)。与 user-center 的 user layout 相对。
+const adminLayout = `
+{{define "layout"}}
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · vpn-master</title>
+<style>{{.CSS}}</style>
+</head>
+<body>
+<nav class="wm-nav">
+  <a class="wm-brand" href="/admin">vpn-master</a>
+  {{if eq .Active "overview"}}<a class="wm-nav-item wm-active" href="/admin">总览</a>{{else}}<a class="wm-nav-item" href="/admin">总览</a>{{end}}
+  {{if eq .Active "upstreams"}}<a class="wm-nav-item wm-active" href="/admin/upstreams">上游</a>{{else}}<a class="wm-nav-item" href="/admin/upstreams">上游</a>{{end}}
+  {{if eq .Active "nodes"}}<a class="wm-nav-item wm-active" href="/admin/nodes">节点</a>{{else}}<a class="wm-nav-item" href="/admin/nodes">节点</a>{{end}}
+  {{if eq .Active "events"}}<a class="wm-nav-item wm-active" href="/admin/events">事件</a>{{else}}<a class="wm-nav-item" href="/admin/events">事件</a>{{end}}
+  {{if eq .Active "users"}}<a class="wm-nav-item wm-active" href="/admin/users">用户</a>{{else}}<a class="wm-nav-item" href="/admin/users">用户</a>{{end}}
+  <span class="wm-nav-right">
+    {{if .Degraded}}<span class="wm-badge wm-badge-danger">DEGRADED</span>{{end}}
+    <a class="wm-link" href="/logout">退出</a>
+  </span>
+</nav>
+<main class="wm-main">
+{{if eq .Content "login"}}{{template "login" .PageData}}{{end}}
+{{if eq .Content "pageOverview"}}{{template "pageOverview" .PageData}}{{end}}
+{{if eq .Content "pageUpstreams"}}{{template "pageUpstreams" .PageData}}{{end}}
+{{if eq .Content "pageNodes"}}{{template "pageNodes" .PageData}}{{end}}
+{{if eq .Content "pageEvents"}}{{template "pageEvents" .PageData}}{{end}}
+{{if eq .Content "pageUsers"}}{{template "pageUsers" .PageData}}{{end}}
+</main>
+</body>
+</html>
+{{end}}
+`
+
 // pageTemplates 是各管理页的 html/template define 块(与 pkg/webui base.html 同 set)。
 // 每个页面命名块 dot = 对应 PageData 结构。表格区 id 供 7.3 轮询刷新。
 

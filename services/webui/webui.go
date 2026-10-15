@@ -1,8 +1,10 @@
-// Package webui 是 ingest admin 页与 user-center 共享的 SSR 组件层（work-7）。
+// Package webui 是各 Go SSR 服务(ingest admin / user-center)共享的组件层。
 //
-// 技术: stdlib html/template + go:embed（原决策 htmlx 不可获取, 按 §0 风险预案回退;
-// 渲染层隔离在本包, 换模板引擎只改这里）。无 Node 构建链, 单二进制。
-// 组件: Layout / Nav / Card / DataTable / Badge / Spinner + 轻量 CSS(Mantine 风变量)。
+// 技术: stdlib html/template + go:embed。原决策 htmlx 不可获取, 按 ingest §0 风险预案回退;
+// 渲染层隔离在本包, 换模板引擎只改这里。无 Node 构建链。
+//
+// 共享内容: 轻量 CSS(Mantine 风变量) + 组件 define(Badge/Spinner) + 模板函数(dict/substr/join)。
+// 各服务自带 layout(导航/壳)与页面 define, 经 ComponentsTemplate 并入同一 template set。
 package webui
 
 import (
@@ -13,7 +15,7 @@ import (
 	"strings"
 )
 
-//go:embed base.html app.css
+//go:embed components.html app.css
 var assets embed.FS
 
 // CSS 返回组件库样式(页面 <head> 内联)。
@@ -25,18 +27,18 @@ func CSS() string {
 	return string(b)
 }
 
-// baseSrc 返回基础布局与组件 define 块。
-func baseSrc() string {
-	b, err := assets.ReadFile("base.html")
+func componentsSrc() string {
+	b, err := assets.ReadFile("components.html")
 	if err != nil {
 		return ""
 	}
 	return string(b)
 }
 
-// BaseTemplate 解析基础布局与组件 define, 可追加页面级 define 片段。
-func BaseTemplate(extra ...string) (*template.Template, error) {
-	src := baseSrc()
+// ComponentsTemplate 解析共享组件 define + 各服务追加的 layout/页面 define 片段。
+// 返回的 template set 里可直接执行任意命名块(layout 或 page)。
+func ComponentsTemplate(extra ...string) (*template.Template, error) {
+	src := componentsSrc()
 	for _, e := range extra {
 		src += "\n" + e
 	}
@@ -72,8 +74,8 @@ func Render(t *template.Template, w io.Writer, name string, data any) error {
 	return t.ExecuteTemplate(w, name, data)
 }
 
-// WritePage 完整渲染一个管理页: Content-Type + 执行命名块。
-func WritePage(w http.ResponseWriter, t *template.Template, name string, data any) {
+// WritePage 完整渲染: Content-Type + 执行命名块(通常是该服务的 layout)。
+func WritePage(w http.ResponseWriter, t *template.Template, layoutName string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = Render(t, w, name, data)
+	_ = Render(t, w, layoutName, data)
 }
