@@ -14,3 +14,4 @@ node_modules/
 
 # 本地
 .DS_Store
+.aios/
