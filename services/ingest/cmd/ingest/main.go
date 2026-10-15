@@ -9,10 +9,12 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"vpnmaster/ingest/internal/db"
+	"vpnmaster/ingest/internal/probe"
 	"vpnmaster/ingest/internal/sub"
 )
 
@@ -50,13 +52,46 @@ func main() {
 	if len(sources) > 0 {
 		interval, _ := time.ParseDuration(envOr("INGEST_POLL_INTERVAL", "5m"))
 		poller := sub.NewPoller(store, sources, interval)
-		if err := poller.Run(ctx); err != nil {
-			log.Fatalf("poller: %v", err)
-		}
+		// 探测周期: PROBE_INTERVAL(默认 30s)
+		probeInterval, _ := time.ParseDuration(envOr("PROBE_INTERVAL", "30s"))
+		prober := probe.NewProber(store)
+		prober.Timeout = 3 * time.Second
+
+		// 订阅拉取 + 探测两个周期 goroutine, ctx 取消时一起退出
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := poller.Run(ctx); err != nil {
+				log.Printf("poller: %v", err)
+			}
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			probeLoop(ctx, prober, probeInterval)
+		}()
+		wg.Wait()
 	} else {
 		<-ctx.Done()
 	}
 	log.Println("ingest stopped")
+}
+
+// probeLoop 周期探测直到 ctx 取消。
+func probeLoop(ctx context.Context, p *probe.Prober, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := p.ProbeRound(ctx); err != nil {
+				log.Printf("probe round: %v", err)
+			}
+		}
+	}
 }
 
 func envOr(key, def string) string {

@@ -211,6 +211,37 @@ func (s *Store) SetLatency(ctx context.Context, fingerprint string, ms int) erro
 		Update("latency_ms", ms).Error
 }
 
+// Evict 手动摘除(admin-web 按钮, 4.4): active→evicted, 记事件, 返回是否发生转移。
+func (s *Store) Evict(ctx context.Context, fingerprint string) (bool, error) {
+	return s.transition(ctx, fingerprint, string(domain.NodeActive), string(domain.NodeEvicted))
+}
+
+// Recover 手动回池(admin-web 按钮, 4.4): evicted→active, 记事件。
+func (s *Store) Recover(ctx context.Context, fingerprint string) (bool, error) {
+	return s.transition(ctx, fingerprint, string(domain.NodeEvicted), string(domain.NodeActive))
+}
+
+// transition 条件转移: 仅当当前状态为 from 时写入 to。返回是否实际转移。
+func (s *Store) transition(ctx context.Context, fingerprint, from, to string) (bool, error) {
+	res := s.db.WithContext(ctx).Model(&NodeRow{}).
+		Where("fingerprint = ? AND status = ?", fingerprint, from).
+		Update("status", to)
+	if res.Error != nil {
+		return false, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return false, nil
+	}
+	kind := "evict"
+	if to == string(domain.NodeActive) {
+		kind = "recover"
+	}
+	if err := s.RecordEvent(ctx, Event{Kind: kind, NodeFP: fingerprint, From: from, To: to}); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
 func (s *Store) ListNodes(ctx context.Context, status string) ([]NodeRow, error) {
 	q := s.db.WithContext(ctx)
 	if status != "" {

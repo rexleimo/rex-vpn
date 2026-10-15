@@ -173,6 +173,47 @@ func TestUpstreamCRUD(t *testing.T) {
 	_ = time.Now()
 }
 
+// Evict/Recover 手动操作接口(4.4): 条件转移 + 事件。
+func TestEvictRecover(t *testing.T) {
+	s := newMemStore(t, "er1")
+	ctx := context.Background()
+	if _, _, err := s.UpsertNodes(ctx, "src", sampleNodes("src")); err != nil {
+		t.Fatal(err)
+	}
+	fp := domain.NewFingerprint(sampleNodes("src")[0])
+	// 先入池
+	if err := s.SetNodeStatus(ctx, fp, string(domain.NodePending), string(domain.NodeActive)); err != nil {
+		t.Fatal(err)
+	}
+	// 重复 evict 不重复转移(已是 evicted 时 from=active 不命中)
+	ok, err := s.Evict(ctx, fp)
+	if err != nil || !ok {
+		t.Fatalf("Evict = %v, %v; want true", ok, err)
+	}
+	nodes, _ := s.ListNodes(ctx, string(domain.NodeEvicted))
+	if len(nodes) != 1 {
+		t.Fatalf("evicted = %d, want 1", len(nodes))
+	}
+	if ok, _ := s.Evict(ctx, fp); ok {
+		t.Fatal("second Evict on evicted node should be no-op")
+	}
+	if ok, err := s.Recover(ctx, fp); err != nil || !ok {
+		t.Fatalf("Recover = %v, %v; want true", ok, err)
+	}
+	acts, _ := s.ListNodes(ctx, string(domain.NodeActive))
+	if len(acts) != 1 {
+		t.Fatalf("active after recover = %d, want 1", len(acts))
+	}
+	evts, _ := s.ListEvents(ctx, 100)
+	kinds := map[string]int{}
+	for _, e := range evts {
+		kinds[e.Kind]++
+	}
+	if kinds["evict"] < 1 || kinds["recover"] < 2 { // 1 SetNodeStatus + 1 Evict; 1 SetNodeStatus + 1 Recover
+		t.Fatalf("event kinds = %v", kinds)
+	}
+}
+
 func TestNodeStatusAndEvents(t *testing.T) {
 	s := newMemStore(t, "ns1")
 	ctx := context.Background()
