@@ -36,22 +36,25 @@ services:
   # → `xray -s reload` 热加载, 不断现有用户连接
   xray-edge:
     build: ./edge            # deploy/edge/Dockerfile (待 ingest 一同落地)
+    # xray-edge = xray + inotify watcher → `xray -s reload` 热加载, 不断现有用户连接
     environment:
       XRAY_CONFIG: /configs/config.json
     volumes:
       - xray-edge-config:/configs   # ingest 写, xray-edge 读
     restart: on-failure
 
-  # ---------- ingest 聚合服务 (Go 自建: 拉取/解析/探测/剔除/写 xray-edge 配置) ----------
+  # ---------- ingest 聚合服务 (Go 自建: 拉取/解析/探测/剔除/写 xray-edge 配置)
+  # 注意: ingest 二进制同时服务 /admin/* SSR 管理页 + /api/* (不做前后分离, 见 work-7)
   # 首次开发前可注释; 构建自 services/ingest
   # ingest:
   #   build: ../../services/ingest
   #   volumes: [ingest-data:/data, xray-edge-config:/configs]
   #   env_file: .env
 
-  # ---------- admin-web (多页管理界面, 后端接口先于 UI, 待落地) ----------
-  # admin-web:
-  #   build: ../../client/... 之外的 services/admin-web (nginx 静态 + /api 反代 ingest)
+  # ---------- user-center (终端用户自助门户, Go SSR 单容器, 见 plan-user-center.md)
+  # user-center:
+  #   build: ../../services/user-center
+  #   env_file: .env   # MARZBAN_API_BASE 等
 
 volumes:
   postgres-data:

@@ -9,14 +9,14 @@
 | 项 | 决策 | 依据 |
 |---|---|---|
 | 核心语言 | **Go 1.23+** | 团队偏好；Xray/sing-box 生态同语言；单二进制部署 |
-| ingest 存储 | **SQLite + `modernc.org/sqlite`** | 纯 Go 无 CGO，容器内单文件零依赖；多实例时再迁 Postgres |
+| ingest 存储 | **GORM + 驱动可换**：MVP 用 `modernc.org/sqlite`（纯 Go 无 CGO），接口层只依赖 GORM，**迁移 Postgres 时只换 DSN+驱动，不动业务代码** | 不写裸 SQL；数据访问收敛在 repo 层（`internal/db` 只导出 repository 接口，不暴露 *sql.DB/GORM db） |
 | xray 配置 | **json.Marshal 模板直出**（不用 xray-go SDK） | schema 稳定；Dockerfile pin xray 版本 |
 | 转发内核选型 | **服务端 = Xray**（balancers 多 outbound 池 + `-s reload` 热加载是原生能力；Marzban/Remnawave 工具链均驱动 Xray；本场景瓶颈在上游带宽而非内核性能）。**客户端 = sing-box**（嵌入单 exe + 性能，见 phase2 文档） | 双内核分工，不重复维护 |
 | 热加载 | **deploy/edge 镜像 = xray + inotify watcher**（容器内 `xray -s reload`） | 不依赖 docker socket；不断用户连接 |
 | 用户中台 | **Marzban 原样使用 + Dokploy Postgres** | 用户 CRUD/流量/配额/订阅全现成 |
 | 上游接入 | **sub 拉取（base64 纯链接 + base64 Clash YAML 双格式）** | 已实测两个真实 sub 为 base64 纯链接 vless+ws+tls |
-| admin-web | **React 18 + Vite + Mantine + react-router v6**，nginx 静态 + `/api` 反代 | 多页管理界面（非单页糊弄） |
-| 鉴权（MVP） | ingest 管理员会话（cookie + 口令） | 不阻塞功能 |
+| Web 界面（admin + user-center） | **不做前后分离**：Go 服务端渲染多页（html/template + go:embed，vanilla JS 仅轮询），单二进制部署，不引入 Node 构建链 | 运维面板/用户门户不是产品级前端；多页=独立路由页面（非 SPA），页面即 API 同二进制，少一整套构建/反代维护 |
+| 鉴权（MVP） | 各 web app 管理员/用户会话（cookie + 口令，HttpOnly） | 不阻塞功能 |
 | CI/git 托管 | **不需要**（用户确认）；本地验证 = `make dev` 全容器 + 手工跑 scripts/*.sh | 开发/验证全在 Docker 内闭环 |
 | 开发环境 | 全 Docker 同构（deploy compose 已落地） | 与线上 Dokploy(Linux) 一致 |
 
@@ -35,7 +35,7 @@
 
 | id | 任务 | 产物 | 验收 |
 |---|---|---|---|
-| 3.1 | 数据模型 | `internal/db/store.go` + schema：`upstreams(id,name,url_masked,poll_interval,last_ok,last_err)`、`nodes(id=hash(addr|port|proto|stream|sni), status, latency_ms, fetched_at, stale_count)`、`events(node_id,from,to,latency,ts)` | 单测：建库/迁移幂等 |
+| 3.1 | 数据模型（**GORM 模型 + repository 接口**） | `internal/db/store.go`（GORM AutoMigrate + `UpstreamRepo/NodeRepo/EventRepo` 接口，`NewStore(driver)` 注入：`sqlite` 默认 / `postgres` 预留）+ 表：`upstreams`、`nodes`(去重键 hash)、`events` | 单测：建库/迁移幂等；repo 接口层单测跑在 in-memory sqlite，**接口零驱动泄漏** |
 | 3.2 | Poller | `internal/sub/poller.go`：周期拉取（env interval），HTTP 15s 超时，429/5xx 指数退避（1m→2m→4m 封顶），成功回写 last_ok；**只存 URL 掩码进 DB** | `poller_test`：httptest mock 成功/429/超时三路径 |
 | 3.3 | Parser | `parse_links.go`（vless/vmess/ss/trojan 四协议 URL 解析；base64 自动识别：raw 或 base64 后判定）、`parse_clash_yaml.go`（proxies 数组，含 vless/vmess/trojan/ss/hysteria2）→ 统一 `Node` 结构 | 每协议 ≥1 fixture + ≥1 非法输入断言报错 |
 | 3.4 | 幂等 upsert + 消失节点 | 去重键 3.1 的 hash；重复拉取不新增；节点连续 2 轮未出现 → stale_count++，2 轮后删除并记 event | `upsert_test`：3 轮拉取断言行数稳定 + 删除路径 |
@@ -70,21 +70,32 @@
 | 6.4 | 流量指向 xray-edge | 按 6.3 结果把用户流量桥到 xray-edge（xray-user outbound / user outbound = xray-edge:10086） | Clash 导入 sub，流量统计增长且出口 IP=上游池 |
 | 6.5 | 客户端接口冒烟 | `GET /api/users?token=`（未来客户端流量看板用）返回该用户流量字段 | 响应断言字段存在 |
 
-### work-7 ingest API + admin-web 多页（dependsOn: work-3，**与 work-5 并行**）
+### work-7 ingest 管理页（SSR 多页）+ API（dependsOn: work-3，**与 work-5 并行**）
+
+> Web 不做前后分离：页面由 ingest 二进制内 html/template + go:embed 渲染，
+> vanilla JS 只做轮询，无 Node 构建链（见 §0 决策）。
 
 | id | 任务 | 产物 | 验收 |
 |---|---|---|---|
-| 7.1 | API 骨架 | `internal/api/`：路由表（net/http + chi）+ 会话中间件（cookie+env 口令）+ JSON 错误约定 | 路由表单测 |
-| 7.2 | 端点 | `GET/POST /upstreams`、`POST /upstreams/:id/pull`、`GET /nodes?status=`、`POST /nodes/:id/evict\|recover`（调 4.4）、`GET /events?limit`、`GET /healthz`（degraded 语义）、`GET /marzban/users`（代理 6.5 接口供用户看板） | 每端点 httptest 契约测试 |
-| 7.3 | admin-web 脚手架 | Vite+React+Mantine 多页（react-router 独立路由+懒加载）：总览/上游/节点/事件/用户 5 页 | `npm run build` 出 nginx 多阶段镜像 |
-| 7.4 | 页面实现 | 总览（在线率/流量 Top/事件流）、上游 CRUD+手动拉取、节点表（延迟 sparkline+摘除恢复按钮）、事件时间线、用户只读看板 | 手动 5 页 checklist（存 docs） |
-| 7.5 | 部署形态 | nginx `/api` 反代 ingest:9100，静态 + 反代同容器 | compose 起容器浏览器走查 |
+| 7.1 | 页面框架 | `internal/web`：模板布局（导航）+ 5 个独立路由页（`/admin` 总览、`/admin/upstreams`、`/admin/nodes`、`/admin/events`、`/admin/users` 只读）+ 会话（cookie+env 口令，HttpOnly） | curl 走查：未登录 302→登录页，登录后 5 页 200 |
+| 7.2 | 页面功能 | 上游 CRUD+手动拉取；节点表（状态/延迟/摘除恢复按钮）；事件时间线；用户页服务端取 Marzban API | 逐页走查记录 docs |
+| 7.3 | 轮询 | vanilla JS 5s 轮询 JSON 端点（同二进制），刷新表格区 | 轮询不整页刷新 |
+| 7.4 | JSON API | `/api/upstreams` `/api/nodes` `/api/events` `/api/healthz`（供未来客户端/监控） | httptest 契约测试绿 |
+| 7.5 | 部署 | ingest 容器直接服务 web，Dokploy 反代指 ingest，无 nginx 静态容器 | 浏览器可访问 |
+
+### work-10 user-center（终端用户自助平台，dependsOn: work-6.2，**与 work-7 并行**）
+
+> **子任务级拆解与技术栈选定见独立计划 `docs/plan-user-center.md`（wc-1..wc-7）**，此处只留索引。
+
+| 摘要 | 依赖 | 验收 |
+|---|---|---|
+| Go SSR 单容器（wc-1 脚手架→wc-2 登录/概览→wc-3 订阅页 ∥ wc-4 购买 ∥ wc-5 安全→wc-6 测试→wc-7 部署），**无前后分离、无 Node** | wc-1 可 mock 先行；联调需 work-6.2/6.5 | 真实 token 登录→看流量→复制订阅 e2e 绿（并入 work-8） |
 
 ### work-8 全链路验收（dependsOn: work-5 + work-6）
 
 | id | 任务 | 脚本 | 验收 |
 |---|---|---|---|
-| 8.1 | E2E 全链路 | `scripts/e2e-full.sh`：Marzban sub → curl -x → 断言出口 IP ∉ 本机 ∧ ∈ 上游池 | 绿 |
+| 8.1 | E2E 全链路 | `scripts/e2e-full.sh`：Marzban sub → curl -x → 断言出口 IP ∉ 本机 ∧ ∈ 上游池；另加 user-center 线：真实 token 登录→看流量→复制订阅 一条绿 | 绿 |
 | 8.2 | 故障演练 | `scripts/chaos.sh`：iptables DROP 一上游 → ≤2 探测周期 events 出现 EVICT 且请求成功率不掉 → 恢复 → RECOVER 出现 | 绿 + 截图日志 |
 | 8.3 | 负载分布 | `scripts/load-50.sh`：50 并发 × 20 次出口 IP 聚合，断言 ≥2 节点均分到流量（leastPing 生效） | 分布表打印 |
 | 8.4 | 长稳说明 | `docs/soak.md`：24h 观察项（节点封禁率/延迟漂移/上游账单对账） | 文档 + 跑 24h 结论 |
@@ -100,13 +111,13 @@
 ## 2. Dependency Graph
 
 ```
-work-2 ─┬─► work-3 ─► work-4 ─► work-5 ──┐
-        ├─► work-6（并行）────────────────┼─► work-8 ─► work-9
-        └─► work-7（仅需 work-3 数据模型）┘(work-7 在 8 前汇入: users 看板)
+work-2 ─┬─► work-3 ─► work-4 ─► work-5 ────────┐
+        ├─► work-6（并行）──► work-10（user-center）┼─► work-8 ─► work-9
+        └─► work-7（仅需 work-3 数据模型）────────┘(work-7/10 在 8 前汇入)
 ```
 
 - **frontier（ready）**：work-2；**无 blocked**
-- **parallelGroups**：P1=[work-6 ∥ work-3→4→5]；P2=[work-5 ∥ work-7]；work-8 gate=5+6(+7)
+- **parallelGroups**：P1=[work-6 ∥ work-3→4→5]；P2=[work-5 ∥ work-7 ∥ work-10]；work-8 gate=5+6+7+10
 - **最短关键路径**：2→3→4→5→8→9（估 5–6 工作日）；work-6/7 不占路径
 - **convergenceGate（work-8）**：e2e-edge 出口断言 ∧ e2e-full 出口断言 ∧ chaos 摘除演练 ∧ load 分布 ≥2 节点
 - **completionClaim**：**soft**（规划产物；hard 需 work-9 线上验证）
@@ -123,7 +134,8 @@ ledger: {
     "上游 sub 格式实测: base64 纯链接 vless+ws+tls, vpn-4zx=42 节点",
     "Marzban xray 集成模式未验证: work-6.3 为关键分叉, 双回退分支(A/B)已预案, 不阻塞 3/4/5"
   ],
-  assignment: { work-2: implementer, work-6: implementer/* 可并行 */ }
+  assignment: { work-2: implementer, work-6: implementer/* 可并行 */ },
+  note: "work-10(user-center) 已从 work-7.6 拆为独立 work item, dependsOn work-6.2, 与 work-7 并行"
 }
 ```
 

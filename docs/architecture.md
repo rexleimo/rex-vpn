@@ -64,20 +64,22 @@ Marzban 的 admin UI 本身就是我们要的"中台"，是完整 Vue 应用（�
 **用户数据全部存它，ingest 不碰用户表**。我们只通过 Marzban REST API
 读用户流量做展示（admin-web 里聚合，不做写）。
 
-## 2.2 自建 admin-web（多页管理界面，非单页 SPA 糊弄）
+## 2.2 自建管理页（SSR 多页，随 ingest 二进制部署）
 
-只做"上游侧"真正缺的那块，React + react-router，独立路由多页：
+**不做前后分离（已确认）**：ingest 二进制内 html/template + go:embed 渲染多页，
+vanilla JS 仅轮询，无 Node 构建链。只做"上游侧"真正缺的那块：
 
 ```
 /admin/            总览: 节点在线率, 用户流量 Top, 事件流
 /admin/upstreams    上游订阅 CRUD: 添加 sub URL, 拉取状态, 节点清单
-/admin/nodes        节点详情: 延迟曲线, ACTIVE/EVICTED 状态, 手动摘除/恢复
+/admin/nodes        节点详情: 延迟, ACTIVE/EVICTED 状态, 手动摘除/恢复
 /admin/events       剔除/回池/拉取失败 事件时间线
-/admin/users        用户流量看板 (只读, 数据来自 Marzban API)
+/admin/users        用户流量看板 (只读, 服务端取 Marzban API)
 ```
 
-- 构建产物走 nginx 静态容器，`/api/*` 反代到 ingest
-- 登录：ingest 侧内置会话登录（cookie + 邮箱 magic link，不引入完整 auth 栈）
+- 会话：cookie + env 口令（HttpOnly）；JSON API 端点同二进制（供未来客户端/监控）
+- 终端用户自助门户 = user-center（Go SSR 单容器，另见 docs/plan-user-center.md），
+  与技术选型同一原则：无前后分离
 
 ## 2.3 客户端（用户侧）
 
