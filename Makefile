@@ -39,3 +39,12 @@ test-go:        # 本地跑 ingest 单测 (或进 dev 容器)
 
 e2e-edge:       # work-5.4: 全链路 xray-edge 出口断言 (需 make dev 起栈 + 真实 sub)
 	scripts/e2e-edge.sh
+
+e2e-full:       # work-8.1: 全链路验收两条线 (需 make dev + 真实 sub + UC_TOKEN)
+	scripts/e2e-full.sh
+
+chaos:          # work-8.2: 故障演练 (iptables DROP 一上游 → EVICT/RECOVER 事件断言)
+	scripts/chaos.sh
+
+load:           # work-8.3: 负载分布 (50 并发 × 20 次出口 IP 聚合, leastPing 断言)
+	scripts/load-50.sh

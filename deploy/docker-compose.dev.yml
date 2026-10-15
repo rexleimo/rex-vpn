@@ -11,6 +11,7 @@ services:
 
   xray-edge:
     ports: ["10086:10086"] # 开发态本地直连调试
+    cap_add: ["NET_ADMIN"]   # work-8.2 chaos.sh: 容器内 iptables DROP 上游演练
 
   ingest:
     build:

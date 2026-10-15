@@ -128,8 +128,9 @@ work-2 ─┬─► work-3 ─► work-4 ─► work-5 ────────�
 ```
 ledger: {
   is_complete: false,
-  in_progress: [],
+  in_progress: [ "work-8 验收脚本已就绪, 待真实 sub 凭据+起栈跑绿" ],
 	facts: [
+    "work-8 验收脚本就绪(未实跑): scripts/e2e-full.sh(线1 edge直连: 出口IP∈池∧≠本机; 线2 user-center 真实token登录→api/status used/limit→subscription页+qr.png, UC_TOKEN必填), scripts/chaos.sh(iptables DROP 池内一节点, 需池≥2; 容器内 apk 现装 iptables, dev 覆盖层 cap_add NET_ADMIN; 新旧 evict/recover 事件用 kind_count 前后计数防旧事件误判), scripts/load-50.sh(长驻客户端容器+50并发×20次出口聚合, ≥2 IP且次多占比≥5%); docs/soak.md 24h 观察项 S1-S7 口径; Makefile 加 e2e-full/chaos/load 目标; 事件 JSON 键大写无 json tag(grep 用 \"Kind\":\"evict\" 紧凑匹配); 待真实 sub 凭据+UC_TOKEN+起栈实跑绿",
     "work-6(6.1/6.2/6.3/6.5) 本地验证完成: Docker Hub 被拦 → PyPI 源码+真 xray 26.3.27 Win 二进制; 面板登录=POST /api/admin/token(form), 用户=GET /api/user/{username}(单数, 无 id 字段), sub token 本地可解码出 username, 订阅按 UA 选格式(clash-verge→Clash YAML), 集成模式选定=内置 xray(Marzban 自管内核, 无需 SSH 外挂); 契约详见 docs/marzban-checklist.md; user-center 客户端已按契约改写并真实联调通过; 6.4(用户出口→xray-edge)并入 work-8 真实上游联调",    "work-7 完成: ingest 内嵌 SSR 管理页+JSON API(单二进制, 无前后分离)。pkg/webui(html/template+go:embed 组件层: Layout/Nav/Card/Badge/Spinner+Mantine风CSS), 5 路由页(/admin 总览//upstreams CRUD+手动拉取//nodes 摘除恢复+5s轮询//events 时间线//users 只读Marzban), 会话(cookie+env口令, HttpOnly), JSON API(/api/upstreams//nodes//events//healthz)。模板引擎按 §0 风险预案从 htmlx 回退到 stdlib html/template(htmlx 仓库不可获取, 渲染层隔离在 pkg/webui 可换)",
     "work-5 完成: xraygen(3 节点 golden 快照 + 结构断言; inbound ws:10086 + vless outbounds up_<fp> + balancer leastPing + api 段) + Syncer 触发链(池变化才写/全灭不写护栏/写 config_write 事件) + scripts/e2e-edge.sh(活体验收: 一次性 vless 客户端经 xray-edge 隧道打 ifconfig.me, 出口 IP ∈ 池); 待真实 sub env 起栈跑 5.4/3.6 联调",
     "work-4 完成: TLS 握手探测(3s 超时/并发 16/仅探 active+pending+evicted 重试周期)+ 状态机(active 连续3败→evicted; evicted 连续2成→active; 全灭保最后池+ALERT+degraded 标志) + 事件落库 + 手动 Evict/Recover 条件转移; testutil/fake_node 自签 TLS 驱动单测",
@@ -139,7 +140,7 @@ ledger: {
     "Marzban 集成模式已定(6.3): 内置 xray, Marzban 自管内核, 无需 SSH 外挂; 本地验证环境=PyPI 源码+xray Win 二进制(Docker Hub 拉取 alienatix/marzban 被代理拦截)"
   ],
   done: [ "work-2", "work-3", "work-4", "work-5", "work-6", "work-7", "work-10" ],
-  remaining: [ "work-6.4 (用户出口→xray-edge, 并入 work-8)", "work-8 E2E(需真实 sub 凭据)", "work-9 Dokploy 上线" ],
+  remaining: [ "work-8 E2E 实跑(脚本已就绪: e2e-full/chaos/load-50/soak.md, 需真实 sub 凭据+UC_TOKEN+起栈)", "work-9 Dokploy 上线" ],
   assignment: { work-8: implementer },
   note: "work-10(user-center) 已从 work-7.6 拆为独立 work item, dependsOn work-6.2, 与 work-7 并行"
 }
