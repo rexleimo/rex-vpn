@@ -36,3 +36,6 @@ edge:           # compose 里 xray-edge build 默认指向这里
 
 test-go:        # 本地跑 ingest 单测 (或进 dev 容器)
 	cd services/ingest && go test ./...
+
+e2e-edge:       # work-5.4: 全链路 xray-edge 出口断言 (需 make dev 起栈 + 真实 sub)
+	scripts/e2e-edge.sh

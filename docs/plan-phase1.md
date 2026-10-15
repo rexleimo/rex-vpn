@@ -130,14 +130,15 @@ ledger: {
   is_complete: false,
   in_progress: [],
   facts: [
+    "work-5 完成: xraygen(3 节点 golden 快照 + 结构断言; inbound ws:10086 + vless outbounds up_<fp> + balancer leastPing + api 段) + Syncer 触发链(池变化才写/全灭不写护栏/写 config_write 事件) + scripts/e2e-edge.sh(活体验收: 一次性 vless 客户端经 xray-edge 隧道打 ifconfig.me, 出口 IP ∈ 池); 待真实 sub env 起栈跑 5.4/3.6 联调",
     "work-4 完成: TLS 握手探测(3s 超时/并发 16/仅探 active+pending+evicted 重试周期)+ 状态机(active 连续3败→evicted; evicted 连续2成→active; 全灭保最后池+ALERT+degraded 标志) + 事件落库 + 手动 Evict/Recover 条件转移; testutil/fake_node 自签 TLS 驱动单测",
     "work-3 完成: GORM store(幂等迁移+upsert/stale 删除路径+事件), poller(15s超时+429/5xx指数退避1m→2m→4m封顶), 双格式 parser(纯链接vless/vmess/ss/trojan + Clash YAML uuid/password 归一), 真实样本 fixture 42 节点去重键验证; main.go 接入 SUB_UPSTREAM_*_URL",
     "技术栈决策: docs/plan-phase1.md §0",
     "上游 sub 格式实测: base64 纯链接 vless+ws+tls, vpn-4zx=42 节点(共享 host/sni/path, 去重后 14 个 distinct addr:port)",
     "Marzban xray 集成模式未验证: work-6.3 为关键分叉, 双回退分支(A/B)已预案, 不阻塞 3/4/5"
   ],
-  done: [ "work-2", "work-3", "work-4" ],
-  assignment: { work-5: implementer },
+  done: [ "work-2", "work-3", "work-4", "work-5" ],
+  assignment: { work-6: implementer, work-7: implementer },
   note: "work-10(user-center) 已从 work-7.6 拆为独立 work item, dependsOn work-6.2, 与 work-7 并行"
 }
 ```

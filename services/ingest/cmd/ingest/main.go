@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"vpnmaster/ingest/internal/db"
+	"vpnmaster/ingest/internal/out"
 	"vpnmaster/ingest/internal/probe"
 	"vpnmaster/ingest/internal/sub"
 )
@@ -24,6 +25,7 @@ func main() {
 	log.SetPrefix("ingest: ")
 	log.SetOutput(os.Stdout)
 	log.Printf("ingest %s starting", version)
+	// work-3/4/5: poller + prober + xraygen 全链路已接入。
 
 	// 存储: 默认 sqlite 文件; 多实例时切 postgres(DSN 由 env 注入)
 	driver := envOr("INGEST_DB_DRIVER", "sqlite")
@@ -49,16 +51,16 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// 探测 + xraygen 触发链: 始终运行(0 节点时空转无害)。订阅拉取仅在配置了来源时运行。
+	probeInterval, _ := time.ParseDuration(envOr("PROBE_INTERVAL", "30s"))
+	prober := probe.NewProber(store)
+	prober.Timeout = 3 * time.Second
+	syncer := out.NewSyncer(store, envOr("EDGE_CONFIG_PATH", "/configs/config.json"), out.Options{})
+
+	var wg sync.WaitGroup
 	if len(sources) > 0 {
 		interval, _ := time.ParseDuration(envOr("INGEST_POLL_INTERVAL", "5m"))
 		poller := sub.NewPoller(store, sources, interval)
-		// 探测周期: PROBE_INTERVAL(默认 30s)
-		probeInterval, _ := time.ParseDuration(envOr("PROBE_INTERVAL", "30s"))
-		prober := probe.NewProber(store)
-		prober.Timeout = 3 * time.Second
-
-		// 订阅拉取 + 探测两个周期 goroutine, ctx 取消时一起退出
-		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -66,30 +68,33 @@ func main() {
 				log.Printf("poller: %v", err)
 			}
 		}()
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			probeLoop(ctx, prober, probeInterval)
-		}()
-		wg.Wait()
-	} else {
-		<-ctx.Done()
 	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		probeSyncLoop(ctx, prober, syncer, probeInterval)
+	}()
+	wg.Wait()
 	log.Println("ingest stopped")
 }
 
-// probeLoop 周期探测直到 ctx 取消。
-func probeLoop(ctx context.Context, p *probe.Prober, interval time.Duration) {
+// probeSyncLoop 周期: 探测一轮 → 池变化则 xraygen 原子写(5.2 触发链)。
+func probeSyncLoop(ctx context.Context, p *probe.Prober, s *out.Syncer, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
+		if _, err := p.ProbeRound(ctx); err != nil {
+			log.Printf("probe round: %v", err)
+		}
+		if wrote, err := s.Sync(ctx); err != nil {
+			log.Printf("xraygen sync: %v", err)
+		} else if wrote {
+			log.Println("xraygen: config written, edge watcher will reload")
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if _, err := p.ProbeRound(ctx); err != nil {
-				log.Printf("probe round: %v", err)
-			}
 		}
 	}
 }

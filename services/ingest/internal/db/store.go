@@ -272,6 +272,17 @@ func (s *Store) ListEvents(ctx context.Context, limit int) ([]Event, error) {
 	return out, nil
 }
 
+// UpsertRow 直接写入/更新一行 NodeRow(按指纹), 供测试与手工造节点用。
+func (s *Store) UpsertRow(ctx context.Context, r *NodeRow) error {
+	if r.ID == 0 {
+		r.LastSeenAt = time.Now()
+		if r.Status == "" {
+			r.Status = string(domain.NodePending)
+		}
+	}
+	return s.db.WithContext(ctx).Save(r).Error
+}
+
 // Close 释放底层连接（测试与优雅退出用）。
 func (s *Store) Close() error {
 	sqlDB, err := s.db.DB()
