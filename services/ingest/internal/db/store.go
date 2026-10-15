@@ -112,6 +112,21 @@ func (s *Store) ListUpstreams(ctx context.Context) ([]Upstream, error) {
 	return out, nil
 }
 
+// CountNodesBySource 统计某来源的节点数(admin 页展示)。
+func (s *Store) CountNodesBySource(ctx context.Context, source string) (int64, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Model(&NodeRow{}).Where("source = ?", source).Count(&n).Error
+	return n, err
+}
+
+// DeleteUpstream 删除来源及其节点(7.2 上游 CRUD)。
+func (s *Store) DeleteUpstream(ctx context.Context, name string) error {
+	if err := s.db.WithContext(ctx).Where("source = ?", name).Delete(&NodeRow{}).Error; err != nil {
+		return err
+	}
+	return s.db.WithContext(ctx).Where("name = ?", name).Delete(&Upstream{}).Error
+}
+
 func (s *Store) MarkUpstreamOK(ctx context.Context, id int64) error {
 	return s.db.WithContext(ctx).Model(&Upstream{}).Where("id = ?", id).
 		Updates(map[string]any{"last_ok_at": time.Now(), "last_err": ""}).Error

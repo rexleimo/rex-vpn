@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"vpnmaster/ingest/internal/out"
 	"vpnmaster/ingest/internal/probe"
 	"vpnmaster/ingest/internal/sub"
+	"vpnmaster/ingest/internal/web"
 )
 
 const version = "0.2.0-dev"
@@ -51,16 +53,27 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	// 探测 + xraygen 触发链: 始终运行(0 节点时空转无害)。订阅拉取仅在配置了来源时运行。
+	// 探测 + xraygen 触发链: 始终运行(0 节点时空转无害)。
 	probeInterval, _ := time.ParseDuration(envOr("PROBE_INTERVAL", "30s"))
 	prober := probe.NewProber(store)
 	prober.Timeout = 3 * time.Second
 	syncer := out.NewSyncer(store, envOr("EDGE_CONFIG_PATH", "/configs/config.json"), out.Options{})
 
-	var wg sync.WaitGroup
+	// 订阅拉取: 无来源时 poller 为 nil(管理页禁用拉取/手动按钮)
+	var poller *sub.Poller
 	if len(sources) > 0 {
 		interval, _ := time.ParseDuration(envOr("INGEST_POLL_INTERVAL", "5m"))
-		poller := sub.NewPoller(store, sources, interval)
+		poller = sub.NewPoller(store, sources, interval)
+	}
+
+	// Web 层(work-7): SSR 管理页 + JSON API, 单二进制, 无前后分离
+	handler, err := web.NewHandler(store, poller, prober, syncer, web.NewMarzbanClient(), web.NewSession(envOr("INGEST_ADMIN_PASSWORD", "")))
+	if err != nil {
+		log.Fatalf("web: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	if poller != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -73,6 +86,16 @@ func main() {
 	go func() {
 		defer wg.Done()
 		probeSyncLoop(ctx, prober, syncer, probeInterval)
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		addr := envOr("INGEST_API_ADDR", ":9100")
+		srv := &http.Server{Addr: addr, Handler: handler.Router()}
+		log.Printf("web: serving admin+api on %s", addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("web: %v", err)
+		}
 	}()
 	wg.Wait()
 	log.Println("ingest stopped")

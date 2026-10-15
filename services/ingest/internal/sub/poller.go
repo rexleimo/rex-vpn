@@ -114,6 +114,26 @@ func (p *Poller) PollOnce(ctx context.Context) []error {
 	return errs
 }
 
+// PollOnceFor 只拉指定来源一轮(管理页按来源手动拉取)。
+func (p *Poller) PollOnceFor(ctx context.Context, name string) []error {
+	for _, s := range p.Sources {
+		if s.Name == name {
+			err := p.pollOne(ctx, s)
+			if err != nil {
+				return []error{err}
+			}
+			return nil
+		}
+	}
+	return []error{fmt.Errorf("unknown source %q", name)}
+}
+
+// AddSource 运行时新增来源(管理页"添加上游"入口), 同步登记入库。
+func (p *Poller) AddSource(s Source) {
+	p.Sources = append(p.Sources, s)
+	p.backoff[s.Name] = 0
+}
+
 // pollOne 拉一个来源: 成功 → upsert+markstale+last_ok; 429/5xx → 退避+last_err+事件。
 func (p *Poller) pollOne(ctx context.Context, s Source) error {
 	if _, err := p.Store.AddUpstream(ctx, s.Name, s.URL); err != nil { // 幂等登记(只存掩码)
