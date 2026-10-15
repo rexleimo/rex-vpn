@@ -89,20 +89,26 @@ apply_op() {
 trap 'echo "[watcher] stopping"; stop_xray; wait' TERM INT
 start_xray
 
-# 监听 config.json(全量变化→restart) 与 .op(热更新指令队列)
-inotifywait -m -e modify,move_create "$CONFIG" "$OPFILE" 2>/dev/null | while read -r _ file; do
-  case "$file" in
-    "$OPFILE"|.op)
-      # 逐行消费指令(读完整行再清空, 防半行)
-      while IFS= read -r line; do
-        [ -n "$line" ] && apply_op "$line"
-      done < "$OPFILE"
-      : > "$OPFILE"
-      ;;
-    *)
-      # config.json 原子 rename 完成
-      sleep 0.3
+# 监听 /configs 目录全事件(递归, 不依赖事件名——alpine inotifywait 事件名受限):
+#   config.json 原子 rename(.tmp+rename) → 签名变化 → 优雅重启
+#   .op 指令队列追加(restart/rmo/ado/bo) → 逐行消费
+# 每次事件去抖 0.3s(等 ingest 原子写/追加完成)。
+LASTSIG=""
+inotifywait -m -r /configs 2>/dev/null | while read -r _; do
+  sleep 0.3
+  # 1) 消费 .op 指令队列(幂等: 空文件不重启)
+  if [ -s "$OPFILE" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] && apply_op "$line"
+    done < "$OPFILE"
+    : > "$OPFILE"
+  fi
+  # 2) config.json 签名变化 → 优雅重启(全量配置生效)
+  if [ -f "$CONFIG" ]; then
+    sig=$(cksum "$CONFIG" 2>/dev/null)
+    if [ -n "$sig" ] && [ "$sig" != "$LASTSIG" ]; then
+      LASTSIG="$sig"
       apply_op "restart"
-      ;;
-  esac
+    fi
+  fi
 done
