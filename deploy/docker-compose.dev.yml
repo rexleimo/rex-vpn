@@ -1,0 +1,41 @@
+# 开发覆盖层: make dev 使用 (compose -f deploy/docker-compose.yml -f deploy/docker-compose.dev.yml)
+# 与线上的差异只有: 源码热挂载 + 调试端口 + 开发态 ingest/admin-web
+services:
+  postgres:
+    ports: ["5432:5432"]   # 仅开发态映射到宿主机
+
+  marzban:
+    ports: ["8080:8080"]
+    environment:
+      LOG_LEVEL: debug
+
+  xray-edge:
+    ports: ["10086:10086"] # 开发态本地直连调试
+
+  ingest:
+    build:
+      context: ../../services/ingest
+      dockerfile: Dockerfile.dev   # air 热重载
+    command: ["air"]
+    volumes:
+      - ../../services/ingest:/src
+      - ingest-data:/data
+      - xray-edge-config:/configs
+    ports: ["9100:9100"]   # ingest API 调试
+    environment:
+      INGEST_API_ADDR: :9100
+      XRAY_CONFIG: /configs/config.json
+      DB_PATH: /data/ingest.db
+
+  dev-shell:
+    image: golang:1.24
+    working_dir: /src
+    volumes:
+      - ..:/src        # 整个 repo 挂进
+      - go-mod-cache:/go/pkg/mod
+    command: sleep infinity
+    network_mode: "service:ingest"  # 与 ingest 同网段, 可直连 postgres/xray-edge
+
+volumes:
+  ingest-data:
+  go-mod-cache:

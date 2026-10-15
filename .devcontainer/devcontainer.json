@@ -1,0 +1,15 @@
+{
+  "name": "vpn-master-dev",
+  "dockerComposeFile": ["../deploy/docker-compose.dev.yml"],
+  "service": "dev-shell",
+  "postCreateCommand": "apt-get update && apt-get install -y inotify-tools",
+  "workspaceFolder": "/src",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go",
+        "ms-azuretools.vscode-docker"
+      ]
+    }
+  }
+}

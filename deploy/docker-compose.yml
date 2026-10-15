@@ -1,0 +1,59 @@
+# vpn-master 统一 compose（Dokploy 线上 / Docker 开发 同源）
+#
+# 原则：
+#  - 线上: Dokploy(Linux) 导入本文件, env 走 Dokploy secrets
+#  - 开发: make up 用本文件 + deploy/docker-compose.dev.yml 覆盖层
+#  - 所有 env 从 .env 读取(开发), 不进 git(.env 已 gitignore)
+services:
+  # ---------- 数据 ----------
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: marzban
+    volumes: [postgres-data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ---------- 用户中台 (Marzban: 用户/订阅/流量/配额, 内含 xray-user) ----------
+  # 集成模式(内置 xray vs RESTful API 外挂)在 setup 时按 marzban 文档验证, 见架构文档 §7
+  marzban:
+    image: alienatix/marzban:latest
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"   # 对外域名由 Dokploy 反代接管
+    restart: on-failure
+
+  # ---------- 上游层 Xray (配置 100% 由 ingest 生成) ----------
+  # 用仓库内 Dockerfile: 官方 xray 镜像 + inotify 监听配置文件变化
+  # → `xray -s reload` 热加载, 不断现有用户连接
+  xray-edge:
+    build: ./edge            # deploy/edge/Dockerfile (待 ingest 一同落地)
+    environment:
+      XRAY_CONFIG: /configs/config.json
+    volumes:
+      - xray-edge-config:/configs   # ingest 写, xray-edge 读
+    restart: on-failure
+
+  # ---------- ingest 聚合服务 (Go 自建: 拉取/解析/探测/剔除/写 xray-edge 配置) ----------
+  # 首次开发前可注释; 构建自 services/ingest
+  # ingest:
+  #   build: ../../services/ingest
+  #   volumes: [ingest-data:/data, xray-edge-config:/configs]
+  #   env_file: .env
+
+  # ---------- admin-web (多页管理界面, 后端接口先于 UI, 待落地) ----------
+  # admin-web:
+  #   build: ../../client/... 之外的 services/admin-web (nginx 静态 + /api 反代 ingest)
+
+volumes:
+  postgres-data:
+  xray-edge-config:
+  # ingest-data:
