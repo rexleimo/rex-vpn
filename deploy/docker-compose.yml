@@ -36,7 +36,7 @@ services:
   # → `xray -s reload` 热加载, 不断现有用户连接
   xray-edge:
     build: ./edge            # deploy/edge/Dockerfile (待 ingest 一同落地)
-    # xray-edge = xray + inotify watcher → `xray -s reload` 热加载, 不断现有用户连接
+    # xray-edge = xray + inotify watcher → `xray -s reload` 热加载(失败则进程重启兑底, 不断用户层连接)
     environment:
       XRAY_CONFIG: /configs/config.json
     volumes:

@@ -13,7 +13,7 @@
   base64 纯链接)     │  │   ingest     │◄── 每5min ─────────│  节点库      │  │
                     │  │  (Go, 自建)  │    生成 outbounds   │ (SQLite)     │  │
                     │  └──────┬──────┘─────────────────────►└──────────────┘  │
-                    │         │ 健康探测/剔除后热加载 (xray -s reload)          │
+                    │         │ 剔除/回池 → 更新配置 → xray-edge 优雅重启      │
                     │         ▼                                              │
                     │  ┌──────────────────────────────┐                     │
                     │  │ xray-edge  ← ingest 独占      │  上游节点池 + LB     │
@@ -37,7 +37,7 @@
 
 **为什么双 xray 实例**：Marzban 会反复重写自己管的 xray 配置（每增删用户都重写）。
 把"用户层"和"上游层"拆成两个实例后，ingest 对 `xray-edge` 有**独占写权**，
-热加载上游节点池不会碰用户层配置，两边互不干扰。
+重启/更新上游节点池不会碰用户层配置，两边互不干扰。
 
 ## 2. Dokploy 服务清单（一个 compose 项目）
 
@@ -139,7 +139,7 @@ Makefile                       # make up / dev / logs / shell / build-ingest
 | upstream 池 | 每个节点一个 vless outbound，`balancers` 汇集 |
 | 权重 / 轮询 | `strategy: roundRobin`（可选）或 `leastPing`（自适应，默认选它） |
 | max_fails / fail_timeout 被动剔除 | ingest 主动探测 + 剔除状态机（下节） |
-| 摘除/恢复 | 剔除 → 更新 xray-edge 配置 → `xray -s reload`（不断现有用户连接） |
+| 摘除/恢复 | 剔除 → 更新 xray-edge 配置 → **优雅重启**（Xray 26.x 无全量热加载，`-s` 命令已实测不存在；用户层 xray-user 不受影响，edge 层在途连接秒级重连） |
 
 策略默认 **leastPing**：延迟最低的节点自然多分流量，比固定权重更贴合 VPN 场景。
 
@@ -149,13 +149,14 @@ Makefile                       # make up / dev / logs / shell / build-ingest
 
 ```
  探测周期 30s: TLS 握手(超时 3s) + 记录延迟
- ACTIVE ──连续 3 次失败──► EVICTED (立即从池摘除, 热加载)
- EVICTED ──每 2min 重试, 连续 2 次成功──► ACTIVE (回池, 热加载)
+ ACTIVE ──连续 3 次失败──► EVICTED (立即从池摘除, 更新配置+优雅重启)
+ EVICTED ──每 2min 重试, 连续 2 次成功──► ACTIVE (回池, 更新配置+优雅重启)
  特例: 全池被摘除时保留最后一次可用池(不置空) + 告警
 ```
 
 - 探测用 TLS 握手而非裸 TCP：vless+ws+tls 节点裸 TCP 通不代表协议可用
-- 全部变化都是"写新配置 → `xray -s reload`"，秒级生效且不踢现有用户
+- 全部变化都是"写新配置 → xray-edge 优雅重启"，秒级生效；用户层 xray-user 连接不被踢
+  （重启的是 edge 实例，非用户层；后续可用 `xray api bo` balancer override 优化免重启）
 - ingest 决策日志落 SQLite + stdout，Dokploy 日志可直接看
 
 ## 5. ingest 服务职责（唯一自研组件）
@@ -169,7 +170,7 @@ probe/
   state.go         // ACTIVE/EVICTED 状态机
 out/
   xraygen.go       // 生成 xray-edge config.json (inbound + N outbounds + balancer)
-  reload.go        // xray -s reload / xray api
+  reload.go        // 触发 xray-edge 优雅重启 (后续可优化 xray api bo)
 db/
   store.go         // SQLite: 节点, 探测记录, 事件
 api/

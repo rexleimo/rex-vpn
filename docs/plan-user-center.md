@@ -9,7 +9,7 @@
 
 | 项 | 决策 | 依据 |
 |---|---|---|
-| 渲染 | **Go SSR：html/template + go:embed**，单二进制 `services/user-center` | 不做前后分离；用户门户页面少（4 页），SSR 足够且免双栈维护 |
+| 渲染 | **Go SSR：htmlx（类型安全+组件语义）+ go:embed**，单二进制 `services/user-center`，组件与 ingest admin 页共享 `pkg/webui` | 不做前后分离；4 页 SSR，组件化管理（组件 = Go 函数返回 `htmlx.S`），无 Node/codegen |
 | 交互 | vanilla JS 仅做轮询（5s 拉 JSON 端点刷新表格/流量区） | 无构建链，无框架版本债 |
 | UI | 手写轻量 CSS（Mantine 风格变量直接写死）+ 移动端适配 | 不引组件库构建链 |
 | 二维码 | `github.com/skip2/go-qrcode`（服务端出图） | 免前端 qrcode 依赖 |
@@ -27,7 +27,7 @@
 | 子任务 | 产物 | 验收 |
 |---|---|---|
 | wc-1.1 | `services/user-center/{cmd,web/templates,web/static,go.mod}` + Dockerfile | `go build` 绿、镜像可跑 |
-| wc-1.2 | 模板布局（用户品牌头/脚 + 侧导航 4 页）+ 轻量 CSS（移动端断点） | 手机视差走查无横向滚动 |
+| wc-1.2 | 接入 `pkg/webui` 组件库（Layout/Nav/Card，用户品牌 CSS 变体，移动端断点） | 手机视差走查无横向滚动 |
 | wc-1.3 | Marzban API client 封装（base URL 走 env；mock 接口便于单测） | 单测不依赖真实 Marzban |
 
 ### wc-2 登录 + 概览（dependsOn: wc-1；联调需 work-6.2/6.5）
