@@ -11,11 +11,12 @@
 | 核心语言 | **Go 1.23+** | 团队偏好；Xray/sing-box 生态同语言；单二进制部署 |
 | ingest 存储 | **GORM + 驱动可换**：MVP 用 `modernc.org/sqlite`（纯 Go 无 CGO），接口层只依赖 GORM，**迁移 Postgres 时只换 DSN+驱动，不动业务代码** | 不写裸 SQL；数据访问收敛在 repo 层（`internal/db` 只导出 repository 接口，不暴露 *sql.DB/GORM db） |
 | xray 配置 | **json.Marshal 模板直出**（不用 xray-go SDK） | schema 稳定；Dockerfile pin xray 版本 |
-| 转发内核选型 | **服务端 = Xray**（balancers 多 outbound 池 + `-s reload` 热加载是原生能力；Marzban/Remnawave 工具链均驱动 Xray；本场景瓶颈在上游带宽而非内核性能）。**客户端 = sing-box**（嵌入单 exe + 性能，见 phase2 文档） | 双内核分工，不重复维护 |
-| 热加载 | **deploy/edge 镜像 = xray + inotify watcher**（容器内 `xray -s reload`） | 不依赖 docker socket；不断用户连接 |
+| 转发内核选型 | **服务端 = Xray**（balancers 多 outbound 池是原生能力；**Xray 26.x 无全量配置热加载**（`-s` 命令已实测不存在），配置变更 → xray-edge 优雅重启；Marzban/Remnawave 工具链均驱动 Xray；本场景瓶颈在上游带宽而非内核性能）。**客户端 = sing-box**（嵌入单 exe + 性能，见 phase2 文档） | 双内核分工，不重复维护 |
+| 热加载 | **deploy/edge 镜像 = xray + inotify watcher**（配置变更 → SIGTERM 优雅重启；后续可用 `xray api bo` balancer override 优化免重启） | 不依赖 docker socket；用户层连接不受影响 |
 | 用户中台 | **Marzban 原样使用 + Dokploy Postgres** | 用户 CRUD/流量/配额/订阅全现成 |
 | 上游接入 | **sub 拉取（base64 纯链接 + base64 Clash YAML 双格式）** | 已实测两个真实 sub 为 base64 纯链接 vless+ws+tls |
-| Web 界面（admin + user-center） | **不做前后分离**：Go 服务端渲染多页（html/template + go:embed，vanilla JS 仅轮询），单二进制部署，不引入 Node 构建链 | 运维面板/用户门户不是产品级前端；多页=独立路由页面（非 SPA），页面即 API 同二进制，少一整套构建/反代维护 |
+| Web 界面（admin + user-center） | **不做前后分离**：Go 服务端渲染多页，**模板引擎 = htmlx**（类型安全 + 组件语义：组件 = Go 函数返回 `htmlx.S`），单二进制，不引入 Node/codegen 工具链 | 运维面板不是产品；组件化痛点用 htmlx 解决；两 app 共享 `pkg/webui` 组件库 |
+| SSR 组件库 | **`pkg/webui`**（Layout/Nav/Card/DataTable/Badge/Spinner 等 + 轻量 CSS，Mantine 风格变量手写）：ingest admin 页与 user-center 共同依赖 | 品牌/组件一处维护；换模板引擎只改这一层（htmlx 不活跃的风险被隔离） |
 | 鉴权（MVP） | 各 web app 管理员/用户会话（cookie + 口令，HttpOnly） | 不阻塞功能 |
 | CI/git 托管 | **不需要**（用户确认）；本地验证 = `make dev` 全容器 + 手工跑 scripts/*.sh | 开发/验证全在 Docker 内闭环 |
 | 开发环境 | 全 Docker 同构（deploy compose 已落地） | 与线上 Dokploy(Linux) 一致 |
@@ -28,7 +29,7 @@
 |---|---|---|---|
 | 2.1 | ingest 工程初始化 | `services/ingest/{cmd/ingest/main.go, go.mod, internal/{sub,probe,out,db,api}/}` 空壳 + 各包 README | `go build ./...` 过 |
 | 2.2 | ingest 双 Dockerfile | `Dockerfile`（golang:1.23-alpine 多阶段→scratch 或 alpine + ca-certs）、`Dockerfile.dev`（装 air） | `make build-ingest` 出镜像可 `docker run` |
-| 2.3 | edge 镜像 | `deploy/edge/Dockerfile`：pin xray 官方镜像（25.x）+ `watcher.sh`（inotifywait /configs/config.json → `xray -s reload`，失败重试）+ 基础 config 模板（inbound ws :10086 + api 段 + 空 outbounds 占位） | `docker run` 后手改 config，日志见 reload |
+| 2.3 | edge 镜像 | `deploy/edge/Dockerfile`：pin xray 官方镜像（实测 26.10.10）+ `watcher.sh`（inotifywait /configs/config.json → 优雅重启；Xray 无全量热加载已实测）+ 基础 config 模板（inbound ws :10086 + api 段 + 空 outbounds 占位） | `docker run` 后手改 config，日志见优雅重启 |
 | 2.4 | 仓库卫生 | `.gitignore`（.env/二进制/ingest.db/node_modules）、`Makefile` 补目标、`scripts/` 目录（后续 5.4/8.x 脚本放这） | `git check-ignore deploy/.env` 命中 |
 
 ### work-3 订阅拉取 + 解析 + 节点库（dependsOn: work-2）
@@ -77,8 +78,8 @@
 
 | id | 任务 | 产物 | 验收 |
 |---|---|---|---|
-| 7.1 | 页面框架 | `internal/web`：模板布局（导航）+ 5 个独立路由页（`/admin` 总览、`/admin/upstreams`、`/admin/nodes`、`/admin/events`、`/admin/users` 只读）+ 会话（cookie+env 口令，HttpOnly） | curl 走查：未登录 302→登录页，登录后 5 页 200 |
-| 7.2 | 页面功能 | 上游 CRUD+手动拉取；节点表（状态/延迟/摘除恢复按钮）；事件时间线；用户页服务端取 Marzban API | 逐页走查记录 docs |
+| 7.1 | 页面框架 | `internal/web`（**htmlx** 模板）+ `pkg/webui` 组件库（Layout/Nav/Card/DataTable/Badge，轻量 CSS）+ 5 个独立路由页（`/admin` 总览、`/admin/upstreams`、`/admin/nodes`、`/admin/events`、`/admin/users` 只读）+ 会话（cookie+env 口令，HttpOnly） | curl 走查：未登录 302→登录页，登录后 5 页 200；`go test` 组件渲染快照绿 |
+| 7.2 | 页面功能 | 上游 CRUD+手动拉取；节点表（状态/延迟/摘除恢复按钮，DataTable 组件+轮询）；事件时间线；用户页服务端取 Marzban API | 逐页走查记录 docs |
 | 7.3 | 轮询 | vanilla JS 5s 轮询 JSON 端点（同二进制），刷新表格区 | 轮询不整页刷新 |
 | 7.4 | JSON API | `/api/upstreams` `/api/nodes` `/api/events` `/api/healthz`（供未来客户端/监控） | httptest 契约测试绿 |
 | 7.5 | 部署 | ingest 容器直接服务 web，Dokploy 反代指 ingest，无 nginx 静态容器 | 浏览器可访问 |
@@ -129,15 +130,22 @@ ledger: {
   is_complete: false,
   in_progress: [],
   facts: [
+    "work-3 完成: GORM store(幂等迁移+upsert/stale 删除路径+事件), poller(15s超时+429/5xx指数退避1m→2m→4m封顶), 双格式 parser(纯链接vless/vmess/ss/trojan + Clash YAML uuid/password 归一), 真实样本 fixture 42 节点去重键验证; main.go 接入 SUB_UPSTREAM_*_URL",
     "技术栈决策: docs/plan-phase1.md §0",
-    "work items 已拆到子任务级(2.x–9.x), 每项带验收命令",
-    "上游 sub 格式实测: base64 纯链接 vless+ws+tls, vpn-4zx=42 节点",
+    "上游 sub 格式实测: base64 纯链接 vless+ws+tls, vpn-4zx=42 节点(共享 host/sni/path, 去重后 14 个 distinct addr:port)",
     "Marzban xray 集成模式未验证: work-6.3 为关键分叉, 双回退分支(A/B)已预案, 不阻塞 3/4/5"
   ],
-  assignment: { work-2: implementer, work-6: implementer/* 可并行 */ },
+  done: [ "work-2", "work-3" ],
+  assignment: { work-4: implementer },
   note: "work-10(user-center) 已从 work-7.6 拆为独立 work item, dependsOn work-6.2, 与 work-7 并行"
 }
 ```
+
+### work-3 完成注记
+- 幂等 upsert 与消失节点删除（3.4）由 `store.UpsertNodes` + `store.MarkStale`（阈值=2）实现，单测覆盖 3 轮稳定 + 删除路径。
+- Poller 只存 URL 掩码进 DB，真实 URL 只在 env/进程内存（`Source` 清单）。
+- 解析失败不当作节点消失（保留旧池，仅记 `pull_err` 事件并进退避）。
+- Clash YAML 凭证字段修正：vless/vmess 取 `uuid`，ss/trojan 取 `password`（原实现误用 `username` 导致空凭证）。
 
 ## 5. work-6.3 备用方案降级链（各方案改动仅限用户层一侧，不影响 work-3/4/5）
 
