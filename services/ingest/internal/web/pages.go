@@ -147,55 +147,66 @@ const pageTemplates = `
 {{define "pageUpstreams"}}
 <h1 class="wm-display fs-2 mb-4">上游</h1>
 {{with .Err}}<div class="alert alert-danger py-2 small">{{.}}</div>{{end}}
-<div class="row g-3">
-  <div class="col-12 col-lg-7">
-    <div class="card p-4">
-      <h2 class="h6 wm-muted mb-3">来源清单</h2>
-      <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0" id="ups-table">
-        <thead><tr><th>名称</th><th>来源(掩码)</th><th>节点</th><th>最近成功</th><th>最近错误</th><th class="text-end">操作</th></tr></thead>
-        <tbody>
-        {{range .Upstreams}}
-          <tr>
-            <td class="fw-semibold">{{.Name}}</td>
-            <td class="wm-mono wm-muted">{{.URLMasked}}</td>
-            <td>{{.NodeCount}}</td>
-            <td class="wm-muted small">{{.LastOKStr}}</td>
-            <td class="wm-muted small">{{.LastErr}}</td>
-            <td class="text-end text-nowrap">
-              <button type="button" class="btn btn-outline-secondary btn-sm"
-                onclick="wmOpenEdit('{{.Name}}')">编辑</button>
-              <form method="POST" action="/admin/upstreams/delete" class="d-inline" data-wm-danger data-wm-title="删除上游" data-wm-ok="删除" data-wm-flash="已删除 {{.Name}}"
-                onsubmit="return wmConfirmAct(event, this, '删除 {{.Name}} 将同时删除其 {{.NodeCount}} 个节点, 不可恢复。确定?')">
-                <input type="hidden" name="name" value="{{.Name}}">
-                <button class="btn btn-outline-danger btn-sm" type="submit">删除</button>
-              </form>
-            </td>
-          </tr>
-        {{else}}
-          <tr><td colspan="6" class="wm-muted text-center py-4">暂无上游, 用右侧表单添加</td></tr>
-        {{end}}
-        </tbody>
-      </table>
-      </div>
-    </div>
+<div class="card p-4">
+  <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <h2 class="h6 wm-muted mb-0 me-auto">来源清单</h2>
+    {{if .CanFetch}}
+    <form method="POST" action="/admin/upstreams/fetch" data-wm-act="/admin/upstreams/fetch" class="d-inline">
+      <button class="btn btn-outline-secondary btn-sm" type="submit">立即拉取全部</button>
+    </form>
+    {{end}}
+    <button type="button" class="btn btn-primary btn-sm" onclick="wmOpenAdd()">+ 添加上游</button>
   </div>
-  <div class="col-12 col-lg-5">
-    <div class="card p-4">
-      <h2 class="h6 wm-muted mb-3">添加来源</h2>
-      <form method="POST" action="/admin/upstreams" class="d-grid gap-2"
-        onsubmit="return wmSubmitAct(event, this, '已添加上游')">
-        <input class="form-control" name="name" placeholder="名称(如 vpn4zx)" required>
-        <input class="form-control" name="url" placeholder="订阅 URL(含 token)" required>
-        <button class="btn btn-primary" type="submit">添加</button>
+  <div class="table-responsive">
+  <table class="table table-hover align-middle mb-0" id="ups-table">
+    <thead><tr><th>名称</th><th>来源(掩码)</th><th>节点</th><th>最近成功</th><th>最近错误</th><th class="text-end">操作</th></tr></thead>
+    <tbody>
+    {{range .Upstreams}}
+      <tr>
+        <td class="fw-semibold">{{.Name}}</td>
+        <td class="wm-mono wm-muted">{{.URLMasked}}</td>
+        <td>{{.NodeCount}}</td>
+        <td class="wm-muted small">{{.LastOKStr}}</td>
+        <td class="wm-muted small">{{.LastErr}}</td>
+        <td class="text-end text-nowrap">
+          <button type="button" class="btn btn-outline-secondary btn-sm"
+            onclick="wmOpenEdit('{{.Name}}')">编辑</button>
+          <form method="POST" action="/admin/upstreams/delete" class="d-inline" data-wm-danger data-wm-title="删除上游" data-wm-ok="删除" data-wm-flash="已删除 {{.Name}}"
+            onsubmit="return wmConfirmAct(event, this, '删除 {{.Name}} 将同时删除其 {{.NodeCount}} 个节点, 不可恢复。确定?')">
+            <input type="hidden" name="name" value="{{.Name}}">
+            <button class="btn btn-outline-danger btn-sm" type="submit">删除</button>
+          </form>
+        </td>
+      </tr>
+    {{else}}
+      <tr><td colspan="6" class="wm-muted text-center py-4">暂无上游, 点右上角「+ 添加上游」</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="modal" id="wm-add" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <form method="POST" action="/admin/upstreams" data-wm-act="/admin/upstreams">
+        <div class="modal-header"><h5 class="modal-title">添加上游</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+        <div class="modal-body d-grid gap-3">
+          <div>
+            <label class="form-label wm-muted small">名称</label>
+            <input class="form-control" name="name" placeholder="如 vpn4zx" required autofocus>
+          </div>
+          <div>
+            <label class="form-label wm-muted small">订阅 URL(含 token)</label>
+            <input class="form-control wm-mono" name="url" placeholder="https://…/sub?token=…" required>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+          <button type="submit" class="btn btn-primary">添加</button>
+        </div>
       </form>
-      {{if .CanFetch}}
-      <hr class="my-4">
-      <form method="POST" action="/admin/upstreams/fetch"
-        onsubmit="return wmSubmitAct(event, this, '拉取已触发')">
-        <button class="btn btn-outline-secondary w-100" type="submit">立即拉取全部</button>
-      </form>
-      {{end}}
     </div>
   </div>
 </div>
@@ -221,6 +232,12 @@ const pageTemplates = `
   </div>
 </div>
 <script>
+function wmOpenAdd(){
+  var el=document.getElementById('wm-add');
+  el.querySelector('input[name=name]').value='';
+  el.querySelector('input[name=url]').value='';
+  bootstrap.Modal.getOrCreateInstance(el).show();
+}
 function wmOpenEdit(name){
   var el=document.getElementById('wm-edit');
   el.querySelector('input[name=name]').value=name;

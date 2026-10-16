@@ -247,7 +247,7 @@ func TestUpstreamCRUDContract(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	body := rec.Body.String()
-	for _, want := range []string{`id="wm-edit"`, "/admin/upstreams/update", "wmConfirmAct", "wmOpenEdit"} {
+	for _, want := range []string{`id="wm-edit"`, "/admin/upstreams/update", "wmConfirmAct", "wmOpenEdit", `id="wm-add"`, "wmOpenAdd", "+ 添加上游"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("upstreams page missing %q", want)
 		}
