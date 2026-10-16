@@ -12,12 +12,12 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	qr "github.com/skip2/go-qrcode"
-	"vpnmaster/user-center/internal/accounts"
 	"vpnmaster/user-center/internal/marzban"
 	"vpnmaster/webkit"
 	"vpnmaster/webui"
@@ -35,9 +35,9 @@ type Server struct {
 	PlansByName map[string]marzban.Plan
 	Template    *template.Template
 
-	session *webkit.Session
-	rl      *webkit.RateLimiter
-	accounts *accounts.Service // nil = 账号体系未启用(WI-2 渐进集成)
+	session  *webkit.Session
+	rl       *webkit.RateLimiter
+	accounts AccountBackend // nil = 账号体系未启用(WI-2 渐进集成)
 
 	mu    sync.Mutex
 	cache map[string]cacheEntry // token -> 最近一次解析(30s), 防 5s 轮询打爆 Marzban
@@ -87,6 +87,12 @@ func (s *Server) Router() *gin.Engine {
 
 	auth := e.Group("", s.auth())
 	auth.GET("/dashboard", s.dashboard)
+	if s.accounts != nil {
+		// 绑定页单独门槛: 需 acct 会话但不要求已绑定(避开 auth() 重定向环)。
+		bind := e.Group("", s.bindOnly())
+		bind.GET("/bind", s.bindPage)
+		bind.POST("/bind", s.bindPost)
+	}
 	auth.GET("/subscription", s.subscription)
 	auth.POST("/subscription/token", s.retoken)
 	auth.GET("/purchase", s.purchase)
@@ -100,15 +106,14 @@ func (s *Server) Router() *gin.Engine {
 
 // ---- 会话/用户 ----
 
-// currentToken 取会话里的 sub token。
+// currentToken 取会话对应的 Marzban token(账号模式经映射表解析)。
 func (s *Server) currentToken(r *http.Request) (string, bool) {
-	tok, _, ok := s.session.Value(r)
-	return tok, ok
+	return s.resolveToken(r)
 }
 
-// userFor 会话 token → 用户(30s 缓存)。
+// userFor 会话 → 用户(30s 缓存)。账号模式先经映射表解出 Marzban token。
 func (s *Server) userFor(ctx context.Context, r *http.Request) (marzban.User, bool, error) {
-	tok, ok := s.currentToken(r)
+	tok, ok := s.resolveToken(r)
 	if !ok {
 		return marzban.User{}, false, nil
 	}
@@ -128,6 +133,12 @@ func (s *Server) userFor(ctx context.Context, r *http.Request) (marzban.User, bo
 // auth 会话门槛: 无会话 303 → /login; token 在 Marzban 失效也踢回登录(语义同原手撸 auth())。
 func (s *Server) auth() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if id, unbound := s.accountUnbound(c); unbound {
+			_ = id // 登录已成但未绑订阅 → 绑定页
+			c.Redirect(http.StatusSeeOther, "/bind")
+			c.Abort()
+			return
+		}
 		u, _, err := s.userFor(c.Request.Context(), c.Request)
 		if err != nil || u.Username == "" {
 			c.Redirect(http.StatusSeeOther, "/login")
@@ -162,7 +173,7 @@ func (s *Server) root(c *gin.Context) {
 
 func (s *Server) loginPage(c *gin.Context) {
 	s.page(c, Page{Title: "登录", Content: "login",
-		PageData: map[string]any{"Err": c.Query("err") != ""}})
+		PageData: map[string]any{"Err": c.Query("err") != "", "Accounts": s.accounts != nil}})
 }
 
 func (s *Server) loginPost(c *gin.Context) {
@@ -177,6 +188,9 @@ func (s *Server) loginPost(c *gin.Context) {
 	if !s.rl.Allow(webkit.ClientIP(c.Request)) {
 		replyFail("限流,请稍后再试")
 		return
+	}
+	if s.loginAcct(c, jsonMode, replyFail) {
+		return // WI-3: 账号模式分支已处理(邮箱密码)
 	}
 	token := c.PostForm("token")
 	u, err := s.Marzban.GetUserByToken(c.Request.Context(), token)
@@ -237,25 +251,45 @@ func (s *Server) subscription(c *gin.Context) {
 	s.page(c, Page{Title: "订阅", Active: "subscription", Content: "pageSubscription", PageData: d})
 }
 
-// retoken wc-3.3: 更换 token(Marzban regenerate 后重粘) → 重校验 + 重种 cookie。
+// retoken wc-3.3: 更换 token。legacy=重校验+重种会话; 账号模式=写映射表不动会话。
 func (s *Server) retoken(c *gin.Context) {
-	token := c.PostForm("token")
+	token := strings.TrimSpace(c.PostForm("token"))
 	jsonMode := webkit.WantsJSON(c)
-	if u, err := s.Marzban.GetUserByToken(c.Request.Context(), token); err == nil && u.ID != 0 {
-		s.session.Revoke(c.Writer, c.Request)
-		s.session.Issue(c.Writer, token)
+	u, err := s.Marzban.GetUserByToken(c.Request.Context(), token)
+	if err != nil || u.ID == 0 {
 		if jsonMode {
-			c.JSON(http.StatusOK, gin.H{"ok": true, "flash": "已更换 token, 立即生效"})
+			c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "token无效"})
 			return
 		}
-		c.Redirect(http.StatusSeeOther, "/subscription?changed=1")
+		c.Redirect(http.StatusSeeOther, "/subscription?err=token无效")
 		return
 	}
+	if s.accounts != nil {
+		v, _ := s.sessionValue(c.Request)
+		if id, isAcct := acctID(v); isAcct {
+			if err := s.accounts.SetLink(c.Request.Context(), id, token); err != nil {
+				if jsonMode {
+					c.JSON(http.StatusInternalServerError, gin.H{"ok": false, "error": "保存失败"})
+					return
+				}
+				c.Redirect(http.StatusSeeOther, "/subscription?err=保存失败")
+				return
+			}
+			if jsonMode {
+				c.JSON(http.StatusOK, gin.H{"ok": true, "flash": "已更换 token, 立即生效"})
+				return
+			}
+			c.Redirect(http.StatusSeeOther, "/subscription?changed=1")
+			return
+		}
+	}
+	s.session.Revoke(c.Writer, c.Request)
+	s.session.Issue(c.Writer, token)
 	if jsonMode {
-		c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "token无效"})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "flash": "已更换 token, 立即生效"})
 		return
 	}
-	c.Redirect(http.StatusSeeOther, "/subscription?err=token无效")
+	c.Redirect(http.StatusSeeOther, "/subscription?changed=1")
 }
 
 func (s *Server) purchase(c *gin.Context) {

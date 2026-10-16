@@ -40,6 +40,18 @@ func main() {
 	}
 	if acct != nil {
 		defer acct.Close(context.Background())
+		if err := acct.EnsureLinksTable(context.Background()); err != nil {
+			log.Fatalf("init links table: %v", err)
+		}
+		// 种子管理员(幂等): UC_ADMIN_EMAIL/UC_ADMIN_PASSWORD 配了才建。
+		if email, pw := os.Getenv("UC_ADMIN_EMAIL"), os.Getenv("UC_ADMIN_PASSWORD"); email != "" && pw != "" {
+			id, err := acct.EnsurePasswordUser(context.Background(), email, pw)
+			if err != nil {
+				log.Printf("seed admin %s: %v", email, err)
+			} else {
+				log.Printf("seed admin ready: %s (%s)", email, id)
+			}
+		}
 		srv.AttachAccounts(acct)
 		log.Println("accounts: authkit 已挂载(PostgreSQL)")
 	} else {

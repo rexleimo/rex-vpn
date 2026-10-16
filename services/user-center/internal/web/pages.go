@@ -1,6 +1,6 @@
 package web
 
-// userLayout 是 user-center 的 layout + 4 页 define。
+// userLayout 是 user-center 的 layout + 页 define。
 // 视觉地基 = vendored Bootstrap 5 + Apple 风 theme.css(ADR-0002);
 // 轮询契约(data-f / inv-body 选择器)与 wc-6.x 保持一致。
 const userLayout = `
@@ -15,7 +15,7 @@ const userLayout = `
 <style>{{.CSS}}</style>
 </head>
 <body>
-{{if ne .Content "login"}}
+{{if and (ne .Content "login") (ne .Content "bind")}}
 <nav class="navbar navbar-expand sticky-top wm-glass">
   <div class="container">
     <a class="navbar-brand wm-brand" href="/dashboard">我的</a>
@@ -37,6 +37,7 @@ const userLayout = `
 {{end}}
 <main class="container py-4 py-md-5" style="max-width:1080px">
 {{if eq .Content "login"}}{{template "login" .PageData}}{{end}}
+{{if eq .Content "bind"}}{{template "bind" .PageData}}{{end}}
 {{if eq .Content "pageDashboard"}}{{template "pageDashboard" .PageData}}{{end}}
 {{if eq .Content "pageSubscription"}}{{template "pageSubscription" .PageData}}{{end}}
 {{if eq .Content "pagePurchase"}}{{template "pagePurchase" .PageData}}{{end}}
@@ -66,12 +67,36 @@ const userLayout = `
   <div class="card wm-auth-card p-4 p-md-5 w-100" style="max-width:420px">
     <div class="text-center mb-4">
       <div class="wm-display fs-3">用户中心</div>
-      <div class="wm-muted small mt-2">粘贴运营发给你的订阅 token</div>
+      {{if .Accounts}}<div class="wm-muted small mt-2">使用运营发放的账号登录</div>{{else}}<div class="wm-muted small mt-2">粘贴运营发给你的订阅 token</div>{{end}}
     </div>
-    {{if .Err}}<div class="alert alert-danger py-2 small" role="alert">token 无效或已过期，请核对后重试</div>{{end}}
+    {{if .Err}}<div class="alert alert-danger py-2 small" role="alert">{{if .Accounts}}账号或密码错误，请重试{{else}}token 无效或已过期，请核对后重试{{end}}</div>{{end}}
+    {{if .Accounts}}
+    <form method="POST" action="/login" data-wm-act="/login" class="d-grid gap-3">
+      <input class="form-control form-control-lg" type="text" name="identifier" placeholder="邮箱或用户名" autocomplete="username" autofocus required>
+      <input class="form-control form-control-lg" type="password" name="password" placeholder="密码" autocomplete="current-password" required>
+      <button class="btn btn-primary btn-lg" type="submit">登录</button>
+    </form>
+    {{else}}
     <form method="POST" action="/login" data-wm-act="/login" class="d-grid gap-3">
       <input class="form-control form-control-lg" type="text" name="token" placeholder="订阅 token" autofocus required>
       <button class="btn btn-primary btn-lg" type="submit">登录</button>
+    </form>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+{{define "bind"}}
+<div class="wm-auth-wrap d-flex align-items-center justify-content-center px-3">
+  <div class="card wm-auth-card p-4 p-md-5 w-100" style="max-width:460px">
+    <div class="text-center mb-4">
+      <div class="wm-display fs-4">绑定订阅</div>
+      <div class="wm-muted small mt-2">账号 <strong>{{.Email}}</strong> 尚未关联订阅。把运营发给你的订阅 token 粘贴一次，之后登录不再需要它。</div>
+    </div>
+    {{if .Err}}<div class="alert alert-danger py-2 small" role="alert">token 无效或已过期，请核对后重试</div>{{end}}
+    <form method="POST" action="/bind" data-wm-act="/bind" class="d-grid gap-3">
+      <input class="form-control form-control-lg" type="text" name="token" placeholder="订阅 token" autofocus required>
+      <button class="btn btn-primary btn-lg" type="submit">绑定并进入</button>
     </form>
   </div>
 </div>
