@@ -214,7 +214,7 @@ const pageTemplates = `
 <div class="modal" id="wm-edit" tabindex="-1">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content">
-      <form method="POST" action="/admin/upstreams/update" onsubmit="return wmEditSave(event, this)">
+      <form method="POST" action="/admin/upstreams/update" data-wm-act="/admin/upstreams/update">
         <div class="modal-header"><h5 class="modal-title">编辑上游</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
         <div class="modal-body">
@@ -243,15 +243,6 @@ function wmOpenEdit(name){
   el.querySelector('input[name=name]').value=name;
   el.querySelector('input[name=url]').value='';
   bootstrap.Modal.getOrCreateInstance(el).show();
-}
-function wmEditSave(ev, form){
-  if(ev) ev.preventDefault();
-  var fields={name:form.elements.name.value, url:form.elements.url.value};
-  wmAction(form.action, fields, function(d){
-    if(d.ok){ bootstrap.Modal.getInstance(document.getElementById('wm-edit')).hide(); wmFlash('已更新 '+fields.name); location.reload(); }
-    else wmToast(d.error||'更新失败','danger');
-  });
-  return false;
 }
 </script>
 {{end}}

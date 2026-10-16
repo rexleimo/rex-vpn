@@ -247,10 +247,14 @@ func TestUpstreamCRUDContract(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	body := rec.Body.String()
-	for _, want := range []string{`id="wm-edit"`, "/admin/upstreams/update", "wmConfirmAct", "wmOpenEdit", `id="wm-add"`, "wmOpenAdd", "+ 添加上游"} {
+	for _, want := range []string{`id="wm-edit"`, "/admin/upstreams/update", "wmConfirmAct", "wmOpenEdit", `id="wm-add"`, "wmOpenAdd", "+ 添加上游", `data-wm-act="/admin/upstreams/update"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("upstreams page missing %q", want)
 		}
+	}
+	// 编辑保存与添加统一走声明式 data-wm-act 路径, 不允许回退到自定义 reload JS
+	if strings.Contains(body, "wmEditSave") {
+		t.Errorf("upstreams page must not contain legacy wmEditSave (edit form should use data-wm-act)")
 	}
 
 	// 添加(JSON 模式)
