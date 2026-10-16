@@ -17,13 +17,13 @@ import (
 // FakeNode 是一个自签 TLS 服务, 模拟上游 vless+tls 节点, 供探测单测驱动。
 // 握手成功即可; 可被"关停"(Closed=true 后拒连) 模拟节点故障。
 type FakeNode struct {
-	Addr    string // host:port
-	Port    int
-	Lis     net.Listener
-	cert    tls.Certificate
-	mu      sync.Mutex
-	Closed  bool
-	closed  chan struct{}
+	Addr   string // host:port
+	Port   int
+	Lis    net.Listener
+	cert   tls.Certificate
+	mu     sync.Mutex
+	Closed bool
+	closed chan struct{}
 }
 
 // NewFakeNode 起一个自签 TLS listener。

@@ -10,8 +10,8 @@ import (
 	"context"
 	"fmt"
 	"html/template"
-	"net/url"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
@@ -393,7 +393,7 @@ type PurchaseData struct {
 	Plans       []PlanView
 	Invoices    []marzban.Invoice
 	JustOrdered bool
-	Err     string
+	Err         string
 }
 
 type InvoiceView struct {
@@ -437,4 +437,3 @@ func fmtExpire(v int) string {
 	}
 	return fmt.Sprintf("%s (余 %d 天)", t.Format("2006-01-02"), left)
 }
-

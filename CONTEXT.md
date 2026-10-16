@@ -9,7 +9,7 @@
 |---|---|---|
 | **用户门户 (user-center)** | 终端用户自助界面：登录(token) / 概览(流量·到期) / 订阅(链接·QR·导入指引) / 购买(下单·订单历史)。Go SSR，`services/user-center`，端口 9200 | 用户口中的"客户端界面"最可能指它——面向付费终端用户的门面 |
 | **运营后台 (admin)** | 运营者界面：上游池 / 节点状态 / 事件 / Marzban。Go SSR，`services/ingest` `/admin/*`，端口 9100 | 已确认纳入重设计范围（双端同修, 2026-10-16）|
-| **共享样式层 (webui)** | 设计 token(`--wm-*` CSS 变量) + 组件模板(badge/spinner) + layout，两个服务共用 `services/webui/app.css` | wc-1.2 重构确立：改一处样式两服务同步，UI 重设计的天然落点 |
+| **共享样式层 (webui)** | Bootstrap 5(vendored) + `theme.css` Apple 风主题层(`--wm-*` 变量) + 组件模板(badge) + 胶水 `wm-ui.js`，两个服务共用 `services/webui` | wc-1.2 重构确立；S4 已退役旧 `app.css` token 层，全站统一 Bootstrap+theme |
 
 ## UI 约束 (Established by code)
 

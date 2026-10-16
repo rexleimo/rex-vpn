@@ -223,7 +223,7 @@ func TestWebUISnapshot(t *testing.T) {
 		"<title>总览 · vpn-master 管理</title>",
 		`href="/assets/bootstrap.min.css"`, "navbar", "wm-glass",
 		`src="/assets/wm-ui.js?v=`, `id="wm-toasts"`, `id="wm-confirm"`,
-		"wm-card", "wm-stat-num", "总览", // 未迁移页过渡样式层仍在
+		"wm-display", "list-group", "总览", // S4: Bootstrap 化完成, app.css 过渡层已退役
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("snapshot missing %q", want)

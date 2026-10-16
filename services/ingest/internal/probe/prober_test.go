@@ -12,11 +12,11 @@ import (
 // 全矩阵转移测试(4.2 验收)。
 func TestStateMatrix(t *testing.T) {
 	cases := []struct {
-		cur            domain.NodeStatus
-		ok             bool
-		fails, succes  int
-		wantNext       domain.NodeStatus
-		wantMoved      bool
+		cur           domain.NodeStatus
+		ok            bool
+		fails, succes int
+		wantNext      domain.NodeStatus
+		wantMoved     bool
 	}{
 		{domain.NodeActive, true, 0, 1, domain.NodeActive, false},
 		{domain.NodeActive, false, 1, 0, domain.NodeActive, false},

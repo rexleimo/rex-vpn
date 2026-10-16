@@ -25,8 +25,8 @@
   - [x] I5 登录页重设计（.shots/login.png → login-v2.png；Apple 渐变底 + 胶囊按钮 + 大圆角卡）
   - [x] I6 概览/订阅/购买页重设计（毛玻璃 navbar + 卡片布局 + 胶囊下单按钮；截图 *-v2.png）
   - [x] I7 全量回归：4 模块 go vet+test 全 PASS + e2e-full ALL PASS（2026-10-16）；admin 样式迁移=后续独立项
-- [ ] **t3-implement**: Implement changes — _Code changes match objective_
-- [ ] **t4-verify**: Verify with tests/checks — _Evidence recorded (command or artifact path)_
+- [x] **t3-implement**: Implement changes — _S1–S4 全部交付: gin+webkit / Bootstrap 门户 / S1 上游 CRUD+胶水 / S2 节点分页+事件游标 / S3 用户搜索+门户 toast / S4 app.css 退役_
+- [x] **t4-verify**: Verify with tests/checks — _每切片 4 模块 vet+test 绿 + e2e-full 双线(S1–S3 实跑); S4 另增 10 页真实渲染静态对账 + 浏览器截图(见下)_
 
 ## Progress
 
@@ -160,3 +160,30 @@
 **验证**: 4 模块 vet+test PASS; e2e-full 双线 ALL PASS; 浏览器实测: 门户登录失败保留输入+toast、成功跳转、复制 toast、下单失败 toast(红)、总览/用户页 Bootstrap 化、用户搜索 test→2 用户。截图 `.shots/s3-*.png`。
 
 **下一切片 S4**: 退役 app.css 旧 wm-* 令牌(仅保留 theme.css 工具类), 事件页视觉微调, 全站扫尾。
+
+## S4 执行结果 (2026-10-16) — 收尾：退役 app.css + 事件页微调 + 全站扫尾
+
+**交付**：
+- **退役 `services/webui/app.css`**（52 行旧 `--wm-*` token 层）。`webui` 包删除 `CSS()` 函数与 embed；两服务 `page()` 统一 `p.CSS = webui.ThemeCSS()`（gin router 层）。视觉地基收敛为 `bootstrap.min.css`(vendored) + `theme.css`(Apple 层) 两段。
+- **清残留类**：`pages.go` 节点页 `wm-badge-*` → 共享 `{{template "badge"}}`（与用户页/事件页一致，映射 Bootstrap `text-bg-*`）。删除 `components.html` 里未被引用的 `spinner` define（唯一 app.css 依赖，全站无 `{{template "spinner"}}`）。
+- **事件页视觉微调**：list-item 改 `py-3`，时间右对齐 `ms-auto text-nowrap`，`From → To` 箭头弱化，详情 `flex-grow-1`；SSR 与"加载更多"JS 渲染同一 DOM 结构。
+- **CONTEXT.md**：共享样式层术语更新为"Bootstrap + theme.css，app.css 已退役"。
+
+**验证（证据）**：
+- 4 模块 `go vet` + `go test` 全 PASS（webui/webkit 无测试文件；ingest/user-center web 快照断言已随新 DOM 同步：`wm-card`/`wm-stat-num` → `wm-display`/`list-group`）。
+- **10 页真实渲染静态对账**：临时导出 admin 6 页 + 门户 4 页 HTML（mock 数据，经测试桩），grep 确认**零** app.css-only 类残留；每页样式引用收敛为 `bootstrap.min.css` + 内联 `<style>`(theme)。
+- **浏览器视觉确认**：事件页（新布局正确）、节点页（active/evicted 徽章走 template badge，工具栏/分页/摘除恢复正常）、总览页（卡片/表格/事件徽章全部 Bootstrap 化）——截图 `.shots/s4/{admin-events,admin-nodes,admin-overview}.png`。
+- 临时导出脚手架与静态服务已清理删除。
+
+**非破坏性说明**：S4 仅改呈现层（CSS 收敛 + 徽章模板 + 事件页 DOM 微调），未触碰 `/api/*` 契约与鉴权模型，故未重跑 e2e-full/chaos/load（本环境无 `make dev` 全栈 + 真实 sub 凭据）；行为等价由 4 模块单测 + 10 页渲染对账担保。
+
+## S5 执行结果 (2026-10-16) — 软件工程硬约束审计与整改
+
+**用户约束**: 文件 ≤500 行; 每文件夹 ≤8 文件; 命名可读; 责任单一。
+
+**审计→整改**:
+- 唯一违规 `ingest/internal/web/router.go`(609 行) 按职责拆分: `router.go`(装配/门槛/视图模型/共享辅助 279) + `handlers.go`(登录+SSR 页 143) + `actions.go`(CRUD 操作端点) + `api.go`(JSON API)。`web/` 保持 8 文件。
+- 全仓 `gofmt -w`(含 6 个历史未格式化文件, 纯空白/import 序变更)。
+- 复核: 全仓最大 Go 文件 444 行(pages.go 模板); 无目录 >8 文件; 4 模块 vet+test 全绿。
+
+**CRUD SaaS 规范现状**: 确认弹窗/toast/行内编辑/服务端搜索分页/游标分页/错误透明/双模式协商已达标。已知边界(均为已拍板非目标或模型约束): 用户页只读(Marzban 写排除)、无批量节点操作、下单不接支付、admin 单口令无操作者身份→无 per-user 审计日志(事件表记录状态变更事实)。

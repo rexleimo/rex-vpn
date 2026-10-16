@@ -3,7 +3,7 @@
 // 技术: stdlib html/template + go:embed。原决策 htmlx 不可获取, 按 ingest §0 风险预案回退;
 // 渲染层隔离在本包, 换模板引擎只改这里。无 Node 构建链。
 //
-// 共享内容: 轻量 CSS(Mantine 风变量) + 组件 define(Badge/Spinner) + 模板函数(dict/substr/join)。
+// 共享内容: 主题 CSS(Bootstrap 之上的 Apple 风 theme.css) + 组件 define(Badge) + 模板函数(dict/substr/join)。
 // 各服务自带 layout(导航/壳)与页面 define, 经 ComponentsTemplate 并入同一 template set。
 package webui
 
@@ -16,17 +16,8 @@ import (
 	"time"
 )
 
-//go:embed components.html app.css theme.css wm-ui.js dist/bootstrap.min.css dist/bootstrap.bundle.min.js
+//go:embed components.html theme.css wm-ui.js dist/bootstrap.min.css dist/bootstrap.bundle.min.js
 var assets embed.FS
-
-// CSS 返回组件库样式(页面 <head> 内联)。旧 token 层, admin 未迁移前保留(ADR-0002 后果)。
-func CSS() string {
-	b, err := assets.ReadFile("app.css")
-	if err != nil {
-		return ""
-	}
-	return string(b)
-}
 
 // ThemeCSS 返回 Bootstrap 之上的 Apple 风主题层(小体积, 页面内联)。
 // 返回 template.CSS: 嵌入内容受信, 跳过 html/template 在 <style> 上下文的净化(否则输出 ZgotmplZ)。
@@ -52,7 +43,7 @@ func Asset(name string) ([]byte, string, bool) {
 		if err != nil {
 			return nil, "", false
 		}
-			if strings.HasSuffix(name, ".js") {
+		if strings.HasSuffix(name, ".js") {
 			return b, "application/javascript; charset=utf-8", true
 		}
 		return b, "text/css; charset=utf-8", true

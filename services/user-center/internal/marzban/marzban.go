@@ -107,11 +107,11 @@ func NewHTTP() Client {
 		return nil
 	}
 	return &httpClient{
-		base:      base,
-		adminU:    os.Getenv("MARZBAN_ADMIN_USER"),
-		adminP:    os.Getenv("MARZBAN_ADMIN_PASSWORD"),
-		http:      &http.Client{Timeout: 20 * time.Second},
-		subUA:     os.Getenv("MARZBAN_SUB_UA"),
+		base:   base,
+		adminU: os.Getenv("MARZBAN_ADMIN_USER"),
+		adminP: os.Getenv("MARZBAN_ADMIN_PASSWORD"),
+		http:   &http.Client{Timeout: 20 * time.Second},
+		subUA:  os.Getenv("MARZBAN_SUB_UA"),
 	}
 }
 
@@ -299,4 +299,3 @@ func (disabled) ListInvoices(ctx context.Context, token string) ([]Invoice, erro
 
 // Disabled 返回禁用桩。
 func Disabled() Client { return disabled{} }
-

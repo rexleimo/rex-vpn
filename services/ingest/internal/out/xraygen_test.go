@@ -17,19 +17,19 @@ func goldenRows() []db.NodeRow {
 			Fingerprint: "aaaabbbb00001111aaaabbbb00001111",
 			Address:     "1.2.3.4", Port: 443, Protocol: "vless",
 			StreamJSON: `{"network":"ws","user":"uuid-a","sni":"one.example.com","fp":"chrome","wsPath":"/a"}`,
-			SNI: "one.example.com", Status: "active",
+			SNI:        "one.example.com", Status: "active",
 		},
 		{
 			Fingerprint: "ccccdddd00001111ccccdddd00001111",
 			Address:     "5.6.7.8", Port: 443, Protocol: "vless",
 			StreamJSON: `{"network":"ws","user":"uuid-b","sni":"two.example.com","fp":"chrome","wsPath":"/b"}`,
-			SNI: "two.example.com", Status: "active",
+			SNI:        "two.example.com", Status: "active",
 		},
 		{
 			Fingerprint: "eeeeffff00001111eeeeffff00001111",
 			Address:     "9.10.11.12", Port: 8443, Protocol: "vless",
 			StreamJSON: `{"network":"ws","user":"uuid-c","sni":"three.example.com","fp":"chrome","wsPath":"/c"}`,
-			SNI: "three.example.com", Status: "active",
+			SNI:        "three.example.com", Status: "active",
 		},
 	}
 }

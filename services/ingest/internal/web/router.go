@@ -1,13 +1,14 @@
 package web
 
+// router.go: Handler 构造 + gin 路由装配 + 会话门槛 + 视图模型/共享辅助。
+// 页面/操作/API 三类 handler 各在 handlers.go / actions.go / api.go(单一职责)。
+
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
-	"net/url"
-	"strings"
 	"strconv"
 	"time"
 
@@ -27,43 +28,43 @@ type Handler struct {
 	Store    *db.Store
 	Poller   *sub.Poller // 可 nil(无来源时禁用手动拉取)
 	Prober   *probe.Prober
-	Syncer   *out.Syncer // 可 nil; 手动摘除/回池后触发一次 xraygen
+	Syncer   *out.Syncer    // 可 nil; 手动摘除/回池后触发一次 xraygen
 	Marzban  *MarzbanClient // 可 nil
 	Session  *Session
 	Template *template.Template
 }
 
-// 各页数据视图(模板扁平化)。
+// ---- 视图模型(模板扁平化 + JSON API 复用) ----
 
 type UpstreamView struct {
-	Name        string
-	URLMasked   string
-	LastOKStr   string
-	LastErr     string
-	NodeCount   int
+	Name      string
+	URLMasked string
+	LastOKStr string
+	LastErr   string
+	NodeCount int
 }
 
 type NodeView struct {
-	Fingerprint  string
-	Addr         string
-	Port         int
-	Protocol     string
-	Status       string
-	StatusVar    string
-	LatencyStr   string
-	LastSeenStr  string
-	Tag          string
+	Fingerprint string
+	Addr        string
+	Port        int
+	Protocol    string
+	Status      string
+	StatusVar   string
+	LatencyStr  string
+	LastSeenStr string
+	Tag         string
 }
 
 type EventView struct {
-	ID          int64 `json:"ID"`
-	Kind        string
-	KindVar     string
-	NodeFP      string
-	From        string
-	To          string
-	Detail      string
-	AtStr       string
+	ID      int64 `json:"ID"`
+	Kind    string
+	KindVar string
+	NodeFP  string
+	From    string
+	To      string
+	Detail  string
+	AtStr   string
 }
 
 type UserView struct {
@@ -79,7 +80,7 @@ type Page struct {
 	Title    string
 	Active   string
 	Degraded bool
-	CSS      template.CSS // 内联主题/app 样式为受信嵌入内容, 避开 <style> 上下文净化(ZgotmplZ)
+	CSS      template.CSS // 内联主题层为受信嵌入内容, 避开 <style> 上下文净化(ZgotmplZ)
 	Content  string
 	PageData any
 }
@@ -196,90 +197,7 @@ func (h *Handler) guardAPI() gin.HandlerFunc {
 	}
 }
 
-// ---- 登录/登出 ----
-
-func (h *Handler) loginPage(c *gin.Context) {
-	webui.WritePage(c.Writer, h.Template, "layout", Page{
-		Title: "登录", CSS: template.CSS(string(webui.CSS()) + string(webui.ThemeCSS())), Content: "login",
-		PageData: map[string]any{"Err": c.Query("err") != ""},
-	})
-}
-
-func (h *Handler) loginPost(c *gin.Context) {
-	pw := c.PostForm("password")
-	if !h.Session.LoginOK(pw) {
-		c.Redirect(http.StatusSeeOther, "/login?err=1")
-		return
-	}
-	h.Session.Issue(c.Writer)
-	c.Redirect(http.StatusSeeOther, "/admin")
-}
-
-func (h *Handler) logout(c *gin.Context) {
-	h.Session.Revoke(c.Writer, c.Request)
-	c.Redirect(http.StatusSeeOther, "/login")
-}
-
-// ---- SSR 页 ----
-
-func (h *Handler) page(c *gin.Context, p Page) {
-	if h.Prober != nil {
-		p.Degraded = h.Prober.Degraded()
-	}
-	// 过渡期双样式层: app.css(未迁移页) + theme.css(Bootstrap 主题), ADR-0002 后果。
-	p.CSS = template.CSS(webui.CSS() + string(webui.ThemeCSS()))
-	webui.WritePage(c.Writer, h.Template, "layout", p)
-}
-
-func (h *Handler) overview(c *gin.Context) {
-	ctx := c.Request.Context()
-	ups, _ := h.Store.ListUpstreams(ctx)
-	nodes, _ := h.Store.ListNodes(ctx, "")
-	evs, _ := h.Store.ListEvents(ctx, 12)
-	counts := map[string]int{}
-	for _, n := range nodes {
-		counts[n.Status]++
-	}
-	uviews := make([]UpstreamView, 0, len(ups))
-	for _, u := range ups {
-		uc, _ := h.Store.CountNodesBySource(ctx, u.Name)
-		uviews = append(uviews, h.upstreamView(u, uc))
-	}
-	h.page(c, Page{Title: "总览", Active: "overview", Content: "pageOverview",
-		PageData: OverviewData{
-			UpstreamCount: len(ups),
-			NodeCounts:    counts,
-			RecentEvents:  eventViews(evs),
-			Upstreams:     uviews,
-		}})
-}
-
-func (h *Handler) upstreams(c *gin.Context) {
-	ctx := c.Request.Context()
-	ups, _ := h.Store.ListUpstreams(ctx)
-	views := make([]UpstreamView, 0, len(ups))
-	for _, u := range ups {
-		uc, _ := h.Store.CountNodesBySource(ctx, u.Name)
-		views = append(views, h.upstreamView(u, uc))
-	}
-	h.page(c, Page{Title: "上游", Active: "upstreams", Content: "pageUpstreams",
-		PageData: UpstreamsData{Upstreams: views, CanFetch: h.Poller != nil, Err: c.Query("err")}})
-}
-
-func (h *Handler) nodes(c *gin.Context) {
-	nq := nodeQueryFrom(c)
-	if c.Query("size") == "" {
-		nq.Size = 25 // 页面默认 25/页; API 无参仍全量(旧脚本契约)
-	}
-	rows, total, _ := h.Store.QueryNodes(c.Request.Context(), nq)
-	views := make([]NodeView, 0, len(rows))
-	for _, n := range rows {
-		views = append(views, h.nodeView(n))
-	}
-	h.page(c, Page{Title: "节点", Active: "nodes", Content: "pageNodes", PageData: NodesData{
-		Nodes: views, Q: nq.Q, Status: nq.Status, Page: nq.Page, Size: nq.Size, Total: int(total),
-	}})
-}
+// ---- 共享辅助: 查询解析 + 视图映射 + 时间/JSON ----
 
 // nodeQueryFrom 解析 ?q=&status=&page=&size=; 默认 size=25(页面), API 无 size=全量兼容旧脚本。
 func nodeQueryFrom(c *gin.Context) db.NodeQuery {
@@ -296,254 +214,6 @@ func atoiOr(v string, def int) int {
 	}
 	return def
 }
-
-func (h *Handler) events(c *gin.Context) {
-	evs, _ := h.Store.ListEventsBefore(c.Request.Context(), 0, 51)
-	hasMore := len(evs) > 50
-	if hasMore {
-		evs = evs[:50]
-	}
-	h.page(c, Page{Title: "事件", Active: "events", Content: "pageEvents",
-		PageData: EventsData{Events: eventViews(evs), HasMore: hasMore}})
-}
-
-func (h *Handler) users(c *gin.Context) {
-	var d UsersData
-	if h.Marzban == nil {
-		d = UsersData{ErrText: "MARZBAN_API_BASE 未配置, 用户页不可用 (work-6 联调后启用)"}
-	} else if users, err := h.Marzban.ListUsers(c.Request.Context()); err != nil {
-		d = UsersData{Configured: true, ErrText: err.Error(), Users: []UserView{}}
-	} else {
-		q := strings.ToLower(c.Query("q"))
-		views := make([]UserView, 0, len(users))
-		for _, u := range users {
-			if q != "" && !strings.Contains(strings.ToLower(u.Username), q) && !strings.Contains(strings.ToLower(u.ID), q) {
-				continue // S3: 服务端搜索(浏览器视角), Marzban API 无 q 参数时本地过滤
-			}
-			var exp string
-			if u.ExpireTime > 0 {
-				exp = time.Unix(u.ExpireTime, 0).Format("2006-01-02")
-			} else {
-				exp = "never"
-			}
-			variant := "danger"
-			if u.Status == "active" {
-				variant = "active"
-			}
-			views = append(views, UserView{
-				ID: u.ID, Username: u.Username, Status: u.Status, StatusVar: variant,
-				ExpireStr: exp,
-				TrafficStr: fmt.Sprintf("%d↑/%d↓", u.TotalUpload, u.TotalDownload),
-			})
-		}
-		d = UsersData{Configured: true, Users: views, Q: c.Query("q")}
-	}
-	h.page(c, Page{Title: "用户", Active: "users", Content: "pageUsers", PageData: d})
-}
-
-// ---- 管理操作 (7.2 + S1 CRUD 闭环/ADR-0004) ----
-// 双模式: wm-ui.js fetch(X-WM-Fetch: json) → JSON {ok,flash|error}; 无 JS 表单 → 303 + ?err= 兜底。
-
-func replyOK(c *gin.Context, redirect, flash string) {
-	if webkit.WantsJSON(c) {
-		c.JSON(http.StatusOK, gin.H{"ok": true, "flash": flash})
-		return
-	}
-	c.Redirect(http.StatusSeeOther, redirect)
-}
-
-func replyErr(c *gin.Context, redirect string, code int, msg string) {
-	if webkit.WantsJSON(c) {
-		c.JSON(code, gin.H{"ok": false, "error": msg})
-		return
-	}
-	c.Redirect(http.StatusSeeOther, redirect+"?err="+url.QueryEscape(msg))
-}
-
-const upsRedirect = "/admin/upstreams"
-
-func (h *Handler) upstreamAdd(c *gin.Context) {
-	name := c.PostForm("name")
-	urlStr := c.PostForm("url")
-	if name == "" || urlStr == "" {
-		replyErr(c, upsRedirect, http.StatusBadRequest, "名称与 URL 必填")
-		return
-	}
-	created, err := h.Store.AddUpstream(c.Request.Context(), name, urlStr)
-	if err != nil {
-		replyErr(c, upsRedirect, http.StatusInternalServerError, "入库失败: "+err.Error())
-		return
-	}
-	if !created {
-		replyErr(c, upsRedirect, http.StatusConflict, "来源 "+name+" 已存在")
-		return
-	}
-	if h.Poller != nil {
-		h.Poller.AddSource(sub.Source{Name: name, URL: urlStr})
-		_ = h.Poller.PollOnceFor(c.Request.Context(), name)
-	}
-	replyOK(c, upsRedirect, "已添加上游 "+name)
-}
-
-// upstreamUpdate 编辑上游 URL(S1: 编辑不再删后重加)。name 是 nodes.source 外键不可改。
-func (h *Handler) upstreamUpdate(c *gin.Context) {
-	name := c.PostForm("name")
-	urlStr := c.PostForm("url")
-	if name == "" || urlStr == "" {
-		replyErr(c, upsRedirect, http.StatusBadRequest, "名称与 URL 必填")
-		return
-	}
-	updated, err := h.Store.UpdateUpstreamURL(c.Request.Context(), name, urlStr)
-	if err != nil {
-		replyErr(c, upsRedirect, http.StatusInternalServerError, "更新失败: "+err.Error())
-		return
-	}
-	if !updated {
-		replyErr(c, upsRedirect, http.StatusNotFound, "来源 "+name+" 不存在")
-		return
-	}
-	if h.Poller != nil && !h.Poller.UpdateSource(name, urlStr) {
-		// 入库已改但运行期拉取清单无此源(env 外手动添加的源重启后丢失, 既有语义)
-		replyOK(c, upsRedirect, "已更新展示, 但该来源不在拉取清单(需重新添加才能拉取)")
-		return
-	}
-	replyOK(c, upsRedirect, "已更新 "+name)
-}
-
-func (h *Handler) upstreamDelete(c *gin.Context) {
-	name := c.PostForm("name")
-	if err := h.Store.DeleteUpstream(c.Request.Context(), name); err != nil {
-		replyErr(c, upsRedirect, http.StatusInternalServerError, "删除失败: "+err.Error())
-		return
-	}
-	if h.Poller != nil {
-		h.Poller.RemoveSource(name) // 不同步摘除会把已删行复活(pollOne 幂等登记)
-	}
-	replyOK(c, upsRedirect, "已删除 "+name)
-}
-
-func (h *Handler) upstreamFetch(c *gin.Context) {
-	if h.Poller == nil {
-		replyErr(c, upsRedirect, http.StatusServiceUnavailable, "无已配置上游")
-		return
-	}
-	name := c.PostForm("name")
-	if name != "" {
-		if errs := h.Poller.PollOnceFor(c.Request.Context(), name); len(errs) > 0 {
-			replyErr(c, upsRedirect, http.StatusBadGateway, fmt.Sprint(errs[0]))
-			return
-		}
-		replyOK(c, upsRedirect, "已拉取 "+name)
-		return
-	}
-	_ = h.Poller.PollOnce(c.Request.Context())
-	replyOK(c, upsRedirect, "拉取已触发")
-}
-
-func (h *Handler) nodeEvict(c *gin.Context) {
-	fp := c.PostForm("fp")
-	if _, err := h.Store.Evict(c.Request.Context(), fp); err != nil {
-		replyErr(c, "/admin/nodes", http.StatusInternalServerError, "摘除失败: "+err.Error())
-		return
-	}
-	if err := triggerXraygen(c.Request.Context(), h); err != nil {
-		replyErr(c, "/admin/nodes", http.StatusBadGateway, "已摘除但 xray 同步失败: "+err.Error())
-		return
-	}
-	replyOK(c, "/admin/nodes", "已摘除并同步出口")
-}
-
-func (h *Handler) nodeRecover(c *gin.Context) {
-	fp := c.PostForm("fp")
-	if _, err := h.Store.Recover(c.Request.Context(), fp); err != nil {
-		replyErr(c, "/admin/nodes", http.StatusInternalServerError, "回池失败: "+err.Error())
-		return
-	}
-	if err := triggerXraygen(c.Request.Context(), h); err != nil {
-		replyErr(c, "/admin/nodes", http.StatusBadGateway, "已回池但 xray 同步失败: "+err.Error())
-		return
-	}
-	replyOK(c, "/admin/nodes", "已回池并同步出口")
-}
-
-// ---- JSON API (7.4): 供轮询(7.3)/未来客户端/监控 ----
-
-func (h *Handler) apiHealthz(c *gin.Context) {
-	degraded := false
-	if h.Prober != nil {
-		degraded = h.Prober.Degraded()
-	}
-	status := http.StatusOK
-	if degraded {
-		status = http.StatusServiceUnavailable
-	}
-	writeJSON(c.Writer, status, map[string]any{"status": "ok", "degraded": degraded})
-}
-
-func (h *Handler) apiUpstreams(c *gin.Context) {
-	ups, _ := h.Store.ListUpstreams(c.Request.Context())
-	out := make([]map[string]any, 0, len(ups))
-	for _, u := range ups {
-		uc, _ := h.Store.CountNodesBySource(c.Request.Context(), u.Name)
-		out = append(out, map[string]any{
-			"name": u.Name, "url_masked": u.URLMasked,
-			"last_ok_at": u.LastOKAt.Format(time.RFC3339), "last_err": u.LastErr,
-			"node_count": uc,
-		})
-	}
-	writeJSON(c.Writer, http.StatusOK, out)
-}
-
-func (h *Handler) apiNodes(c *gin.Context) {
-	nq := nodeQueryFrom(c)
-	rows, total, err := h.Store.QueryNodes(c.Request.Context(), nq)
-	if err != nil {
-		writeJSON(c.Writer, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-	views := make([]NodeView, 0, len(rows))
-	for _, n := range rows {
-		views = append(views, h.nodeView(n))
-	}
-	// 数组体保持旧契约(chaos/load-50); 总数走 header, 分页方读 X-Total-Count。
-	c.Header("X-Total-Count", strconv.FormatInt(total, 10))
-	writeJSON(c.Writer, http.StatusOK, views)
-}
-
-func (h *Handler) apiEvents(c *gin.Context) {
-	before := int64(atoiOr(c.Query("before"), 0))
-	limit := atoiOr(c.Query("limit"), 200) // 无参=200 与旧契约一致(chaos 断言窗口)
-	evs, err := h.Store.ListEventsBefore(c.Request.Context(), before, limit)
-	if err != nil {
-		writeJSON(c.Writer, http.StatusInternalServerError, map[string]any{"error": err.Error()})
-		return
-	}
-	writeJSON(c.Writer, http.StatusOK, eventViews(evs)) // EventView.ID = 游标: 下一页 before=末行 id
-}
-
-func (h *Handler) apiUsers(c *gin.Context) {
-	if h.Marzban == nil {
-		writeJSON(c.Writer, http.StatusServiceUnavailable, map[string]any{"error": "marzban not configured"})
-		return
-	}
-	users, err := h.Marzban.ListUsers(c.Request.Context())
-	if err != nil {
-		writeJSON(c.Writer, http.StatusBadGateway, map[string]any{"error": err.Error()})
-		return
-	}
-	if q := strings.ToLower(c.Query("q")); q != "" {
-		var kept []User
-		for _, u := range users {
-			if strings.Contains(strings.ToLower(u.Username), q) || strings.Contains(strings.ToLower(u.ID), q) {
-				kept = append(kept, u)
-			}
-		}
-		users = kept
-	}
-	writeJSON(c.Writer, http.StatusOK, users)
-}
-
-// ---- 视图辅助 ----
 
 func (h *Handler) upstreamView(u db.Upstream, nodeCount int64) UpstreamView {
 	return UpstreamView{

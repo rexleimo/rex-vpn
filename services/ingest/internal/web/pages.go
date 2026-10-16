@@ -2,7 +2,7 @@ package web
 
 // adminLayout 是 ingest 管理页的 layout(导航/壳/按 Content 分发)。与 user-center 的 user layout 相对。
 // S1(ADR-0003/0004): Bootstrap 壳 + toast/confirm 宿主 + wm-ui.js 共享胶水;
-// 未迁移页面(总览/节点/事件/用户)暂靠 app.css 的 wm-* 过渡样式, 迁移切片完成后退役。
+// S4: app.css 旧 wm-* 过渡层已退役, 全站统一 Bootstrap + theme.css。
 const adminLayout = `
 {{define "layout"}}
 <!doctype html>
@@ -274,7 +274,7 @@ function wmEditSave(ev, form){
         <td class="wm-mono wm-muted">{{substr .Fingerprint 0 8}}</td>
         <td>{{.Addr}}:{{.Port}}</td>
         <td>{{.Protocol}}</td>
-        <td><span class="badge wm-badge-{{.StatusVar}}">{{.Status}}</span></td>
+        <td>{{template "badge" (dict "Text" .Status "Variant" .StatusVar)}}</td>
         <td>{{.LatencyStr}}</td>
         <td class="wm-muted small">{{.LastSeenStr}}</td>
         <td class="text-end">{{template "nodeOps" .}}</td>
@@ -368,12 +368,12 @@ function wmEditSave(ev, form){
 <div class="card p-4">
   <ul class="list-group list-group-flush" id="ev-list">
     {{range .Events}}
-    <li class="list-group-item d-flex flex-wrap gap-2 align-items-center px-0" data-ev-id="{{.ID}}">
+    <li class="list-group-item d-flex flex-wrap gap-2 align-items-center px-0 py-3" data-ev-id="{{.ID}}">
       {{template "badge" (dict "Text" .Kind "Variant" .KindVar)}}
-      <span class="wm-muted small">{{.AtStr}}</span>
       <span class="wm-mono wm-muted">{{substr .NodeFP 0 8}}</span>
-      {{if .From}}<span class="small">{{.From}} → {{.To}}</span>{{end}}
-      <span class="wm-muted small flex-grow-1">{{.Detail}}</span>
+      {{if .From}}<span class="small">{{.From}} <span class="wm-muted">→</span> {{.To}}</span>{{end}}
+      <span class="small flex-grow-1">{{.Detail}}</span>
+      <span class="wm-muted small text-nowrap ms-auto">{{.AtStr}}</span>
     </li>
     {{else}}
     <li class="list-group-item px-0 wm-muted text-center py-4">暂无事件</li>
@@ -396,16 +396,16 @@ function wmEditSave(ev, form){
       var BADGE = {danger: 'text-bg-danger', success: 'text-bg-success', info: 'text-bg-info'};
       evs.forEach(function (e) {
         var li = document.createElement('li');
-        li.className = 'list-group-item d-flex flex-wrap gap-2 align-items-center px-0';
+        li.className = 'list-group-item d-flex flex-wrap gap-2 align-items-center px-0 py-3';
         li.setAttribute('data-ev-id', e.ID);
-        li.innerHTML = '<span class="badge ' + (BADGE[e.KindVar] || 'text-bg-info') + '"></span>' +
-          '<span class="wm-muted small"></span><span class="wm-mono wm-muted"></span>' +
-          '<span class="small"></span><span class="wm-muted small flex-grow-1"></span>';
+        li.innerHTML = '<span class="badge"></span><span class="wm-mono wm-muted"></span>' +
+          '<span class="small"></span><span class="small flex-grow-1"></span><span class="wm-muted small text-nowrap ms-auto"></span>';
+        li.children[0].className = 'badge ' + (BADGE[e.KindVar] || 'text-bg-info');
         li.children[0].textContent = e.Kind;
-        li.children[1].textContent = e.AtStr;
-        li.children[2].textContent = (e.NodeFP || '').slice(0, 8);
-        li.children[3].textContent = e.From ? (e.From + ' → ' + e.To) : '';
-        li.children[4].textContent = e.Detail || '';
+        li.children[1].textContent = (e.NodeFP || '').slice(0, 8);
+        li.children[2].textContent = e.From ? (e.From + ' → ' + e.To) : '';
+        li.children[3].textContent = e.Detail || '';
+        li.children[4].textContent = e.AtStr;
         document.getElementById('ev-list').appendChild(li);
       });
     });

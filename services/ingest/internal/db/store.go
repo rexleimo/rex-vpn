@@ -16,9 +16,9 @@ import (
 
 // Upstream 是一条上游订阅来源。
 type Upstream struct {
-	ID        int64     `gorm:"primaryKey"`
-	Name      string    `gorm:"uniqueIndex"` // 来源标签(如 real-sub-vpn4zx)
-	URLMasked string    // 脱敏展示(保留域名, 隐去 token); 真实 URL 只存 env/secret
+	ID        int64  `gorm:"primaryKey"`
+	Name      string `gorm:"uniqueIndex"` // 来源标签(如 real-sub-vpn4zx)
+	URLMasked string // 脱敏展示(保留域名, 隐去 token); 真实 URL 只存 env/secret
 	LastOKAt  time.Time
 	LastErr   string
 	CreatedAt time.Time
@@ -44,7 +44,7 @@ type NodeRow struct {
 
 // Event 是状态/生命周期事件(剔除/回池/拉取失败), admin 时间线数据源。
 type Event struct {
-	ID     int64 `gorm:"primaryKey"`
+	ID     int64  `gorm:"primaryKey"`
 	Kind   string // "evict" | "recover" | "stale" | "pull_err"
 	NodeFP string
 	From   string

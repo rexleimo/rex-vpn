@@ -34,12 +34,12 @@ func parseClashYAML(content, sourceTag string) ([]domain.Node, error) {
 }
 
 type clashProxy struct {
-	Name      string `yaml:"name"`
-	Type      string `yaml:"type"`
-	Server    string `yaml:"server"`
-	Port      int    `yaml:"port"`
-	Password  string `yaml:"password"`
-	UDP       bool   `yaml:"udp"`
+	Name     string `yaml:"name"`
+	Type     string `yaml:"type"`
+	Server   string `yaml:"server"`
+	Port     int    `yaml:"port"`
+	Password string `yaml:"password"`
+	UDP      bool   `yaml:"udp"`
 	// ss
 	Method string `yaml:"method"`
 	// vless/vmess

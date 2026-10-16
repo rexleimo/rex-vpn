@@ -21,19 +21,19 @@ import (
 
 // 默认值(与 deploy/edge/config-base.json 对齐)。
 const (
-	DefaultInboundPort    = 10086
-	DefaultInboundWSPath  = "/edge-ws"
+	DefaultInboundPort     = 10086
+	DefaultInboundWSPath   = "/edge-ws"
 	DefaultInboundClientID = "00000000-0000-4000-8000-000000000001"
-	DefaultBalancerTag    = "upstream_lb"
-	DefaultAPIListen      = "127.0.0.1:8080"
+	DefaultBalancerTag     = "upstream_lb"
+	DefaultAPIListen       = "127.0.0.1:8080"
 )
 
 // Options 覆盖 xray 生成的关键参数。
 type Options struct {
-	InboundPort    int    // 0 → DefaultInboundPort
-	InboundWSPath  string // "" → DefaultInboundWSPath
+	InboundPort     int    // 0 → DefaultInboundPort
+	InboundWSPath   string // "" → DefaultInboundWSPath
 	InboundClientID string // "" → DefaultInboundClientID
-	AccessLogPath  string // "" → 不记访问日志; 设路径(如 /tmp/xray-access.log)后 load-50 可按 outbound tag 聚合分流分布
+	AccessLogPath   string // "" → 不记访问日志; 设路径(如 /tmp/xray-access.log)后 load-50 可按 outbound tag 聚合分流分布
 }
 
 func (o Options) withDefaults() Options {
@@ -91,17 +91,17 @@ type vnextUser struct {
 }
 type vnextEntry struct {
 	Address string      `json:"address"`
-	Port    int       `json:"port"`
+	Port    int         `json:"port"`
 	Users   []vnextUser `json:"users"`
 }
 type outboundSettings struct {
 	Vnext []vnextEntry `json:"vnext"`
 }
 type outboundStream struct {
-	Network     string      `json:"network"`
-	Security    string      `json:"security,omitempty"`
-	TLS         *tlsSec     `json:"tlsSettings,omitempty"`
-	WSSettings  *ws         `json:"wsSettings,omitempty"`
+	Network    string  `json:"network"`
+	Security   string  `json:"security,omitempty"`
+	TLS        *tlsSec `json:"tlsSettings,omitempty"`
+	WSSettings *ws     `json:"wsSettings,omitempty"`
 }
 type tlsSec struct {
 	ServerName  string `json:"serverName,omitempty"`
@@ -111,8 +111,9 @@ type outbound struct {
 	Tag            string           `json:"tag"`
 	Protocol       string           `json:"protocol"`
 	Settings       outboundSettings `json:"settings"`
-	StreamSettings outboundStream    `json:"streamSettings"`
+	StreamSettings outboundStream   `json:"streamSettings"`
 }
+
 // selectorOutbound 是 xray 26.x 的负载均衡入口: 一个 freedom outbound,
 // 通过 selector 聚合多个节点 tag, 由 balancingStrategy(leastPing) 分流。
 // routing 的 outboundTag 指向本 tag(upstream_lb)。
@@ -129,7 +130,7 @@ type routeRule struct {
 	OutboundTag string   `json:"outboundTag"`
 }
 type routingSec struct {
-	DomainStrategy string    `json:"domainStrategy"`
+	DomainStrategy string      `json:"domainStrategy"`
 	Rules          []routeRule `json:"rules"`
 }
 type xrayConfig struct {
@@ -143,11 +144,11 @@ type xrayConfig struct {
 
 // streamJSON 是 parser 归一化的传输层 JSON(见 sub.streamJSON)。
 type streamJSON struct {
-	Network  string `json:"network"`
-	User     string `json:"user"`
-	SNI      string `json:"sni"`
-	Finger   string `json:"fp"`
-	WSPath   string `json:"wsPath"`
+	Network string `json:"network"`
+	User    string `json:"user"`
+	SNI     string `json:"sni"`
+	Finger  string `json:"fp"`
+	WSPath  string `json:"wsPath"`
 }
 
 // Generate 从 ACTIVE 节点生成 xray-edge 完整配置(5.1)。
