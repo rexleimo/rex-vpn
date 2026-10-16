@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"strings"
 	"strconv"
 	"time"
 
@@ -69,6 +70,7 @@ type UserView struct {
 	ID         string
 	Username   string
 	Status     string
+	StatusVar  string
 	ExpireStr  string
 	TrafficStr string
 }
@@ -109,6 +111,7 @@ type UsersData struct {
 	Configured bool
 	ErrText    string
 	Users      []UserView
+	Q          string
 }
 
 // NewHandler 构造并解析模板。
@@ -311,21 +314,29 @@ func (h *Handler) users(c *gin.Context) {
 	} else if users, err := h.Marzban.ListUsers(c.Request.Context()); err != nil {
 		d = UsersData{Configured: true, ErrText: err.Error(), Users: []UserView{}}
 	} else {
+		q := strings.ToLower(c.Query("q"))
 		views := make([]UserView, 0, len(users))
 		for _, u := range users {
+			if q != "" && !strings.Contains(strings.ToLower(u.Username), q) && !strings.Contains(strings.ToLower(u.ID), q) {
+				continue // S3: 服务端搜索(浏览器视角), Marzban API 无 q 参数时本地过滤
+			}
 			var exp string
 			if u.ExpireTime > 0 {
 				exp = time.Unix(u.ExpireTime, 0).Format("2006-01-02")
 			} else {
 				exp = "never"
 			}
+			variant := "danger"
+			if u.Status == "active" {
+				variant = "active"
+			}
 			views = append(views, UserView{
-				ID: u.ID, Username: u.Username, Status: u.Status,
+				ID: u.ID, Username: u.Username, Status: u.Status, StatusVar: variant,
 				ExpireStr: exp,
 				TrafficStr: fmt.Sprintf("%d↑/%d↓", u.TotalUpload, u.TotalDownload),
 			})
 		}
-		d = UsersData{Configured: true, Users: views}
+		d = UsersData{Configured: true, Users: views, Q: c.Query("q")}
 	}
 	h.page(c, Page{Title: "用户", Active: "users", Content: "pageUsers", PageData: d})
 }
@@ -519,6 +530,15 @@ func (h *Handler) apiUsers(c *gin.Context) {
 	if err != nil {
 		writeJSON(c.Writer, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
+	}
+	if q := strings.ToLower(c.Query("q")); q != "" {
+		var kept []User
+		for _, u := range users {
+			if strings.Contains(strings.ToLower(u.Username), q) || strings.Contains(strings.ToLower(u.ID), q) {
+				kept = append(kept, u)
+			}
+		}
+		users = kept
 	}
 	writeJSON(c.Writer, http.StatusOK, users)
 }

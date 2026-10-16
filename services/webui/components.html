@@ -1,5 +1,5 @@
-{{define "badge"}}
-<span class="wm-badge wm-badge-{{.Variant}}">{{.Text}}</span>
+{{define "badge"}}{{/* S3: Bootstrap 徽章; variant 映射领域状态(active/evicted/pending→success/danger/secondary) */}}
+<span class="badge {{if eq .Variant "active"}}text-bg-success{{else if eq .Variant "evicted"}}text-bg-danger{{else if eq .Variant "pending"}}text-bg-secondary{{else if eq .Variant "danger"}}text-bg-danger{{else if eq .Variant "success"}}text-bg-success{{else if eq .Variant "warning"}}text-bg-warning{{else}}text-bg-info{{end}}">{{.Text}}</span>
 {{end}}
 
 {{define "spinner"}}

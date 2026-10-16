@@ -170,3 +170,29 @@ func min(a, b int) int {
 	}
 	return b
 }
+
+// S3 门户交互契约: login 双模式 — fetch(X-WM-Fetch: json) 失败=401 JSON(页面保留输入),
+// 表单模式失败=303 ?err= 兜底; 成功 JSON 给 redirect。
+func TestLoginJSONNegotiation(t *testing.T) {
+	s := newServer(t)
+	mux := s.Router()
+	form := strings.NewReader("token=bad-token")
+	req := httptest.NewRequest("POST", "/login", form)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("X-WM-Fetch", "json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("json bad login = %d, want 401", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, `"ok":false`) {
+		t.Errorf("json bad login body = %s, want ok:false", body)
+	}
+	req3 := httptest.NewRequest("POST", "/login", strings.NewReader("token=bad-token"))
+	req3.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec3 := httptest.NewRecorder()
+	mux.ServeHTTP(rec3, req3)
+	if rec3.Code != http.StatusSeeOther || !strings.Contains(rec3.Header().Get("Location"), "err=") {
+		t.Errorf("form bad login = %d %q, want 303 ?err=", rec3.Code, rec3.Header().Get("Location"))
+	}
+}

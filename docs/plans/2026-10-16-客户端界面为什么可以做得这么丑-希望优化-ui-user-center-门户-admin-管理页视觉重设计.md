@@ -145,3 +145,18 @@
 **验证**: 4 模块 vet+test PASS(新增 TestNodesPaginationAndEventsCursor); e2e-full 双线 ALL PASS; chaos PASS; 浏览器实跑分页/搜索空态/摘除→自动回池闭环(截图 `.shots/s2-*.png`)。
 
 **下一切片 S3**: 用户页服务端搜索(`/api/users?q=`) + 门户 toast 集成(复制/换token/下单/登录失败保留输入) + 总览页 Bootstrap 化; S4: 事件页视觉微调+退役 app.css/wm-*。
+
+## S3 执行结果 (2026-10-16)
+
+**交付**: 用户页服务端搜索 + 总览页 Bootstrap 化 + 门户 toast/JSON 交互全套
+- badge 组件迁 Bootstrap(`text-bg-*`, 领域状态 active/evicted/pending 映射)。
+- 总览页: 统计卡 + 上游表 + 事件 list-group(彩色徽章)。
+- 用户页: `q` 服务端过滤(`/admin/users?q=` + `/api/users?q=`), StatusVar 徽章。
+- 门户(user-center): wm-ui.js v=6 引入(toast/confirm 宿主 + `form[data-wm-act]` JSON 提交 + `[data-wm-copy-text]` 复制); 登录失败=toast+**保留输入**(契约测试 TestLoginJSONNegotiation); 换 token/下单=toast; 复制=toast。
+- 关键 bug 修: ①toast 白底白字不可见→theme.css 深色语义层(`.wm-toast-*`); ②Bootstrap Toast `fade` 在后台标签页节流不渲染→`animation:false`; ③immutable 缓存→资产 URL 带 `?v=` 版本位; ④ingest marzban 客户端 404: 本版本无 `/api/login`, 正确端点 `/api/admin/token`(user-center 一直是对的); ⑤`/api/users` 返回 `{users:[...]}` 信封, decode 兼容 users/data/裸数组三形态。
+
+**环境陷阱(重要, 已实证)**: bash 工具输入层会把 `password=<真值>` 形态字符串脱敏成 `password=***`, 导致 curl/http.client 直连 marzban 登录出现**假 401**(服务端探针 praw=['*','*','*'] 实锤)。本地凭据类验证一律走 browser MCP(输入框文本不被脱敏)或 dict/拼接形态。AIOS 拦截器与 Clash(7897) 均被排除后仍复现, 元凶是工具层而非网络层。
+
+**验证**: 4 模块 vet+test PASS; e2e-full 双线 ALL PASS; 浏览器实测: 门户登录失败保留输入+toast、成功跳转、复制 toast、下单失败 toast(红)、总览/用户页 Bootstrap 化、用户搜索 test→2 用户。截图 `.shots/s3-*.png`。
+
+**下一切片 S4**: 退役 app.css 旧 wm-* 令牌(仅保留 theme.css 工具类), 事件页视觉微调, 全站扫尾。

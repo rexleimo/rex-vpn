@@ -18,7 +18,7 @@
       '</div>';
     el.querySelector('.toast-body').textContent = msg;
     host.appendChild(el);
-    var t = new bootstrap.Toast(el, { delay: 3500 });
+    var t = new bootstrap.Toast(el, { delay: 3500, animation: false });
     t.show();
     el.addEventListener('hidden.bs.toast', function () { el.remove(); });
   }
@@ -98,7 +98,53 @@
   }
   window.wmSubmitAct = wmSubmitAct;
   window.wmConfirmAct = wmConfirmAct;
+
+  // ---- S3 声明式绑定: [data-wm-copy-text] 复制 / form[data-wm-act] JSON 提交 ----
+  function fallbackCopy(t) {
+    var ta = document.createElement('textarea');
+    ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+  function wmBindCopyText(root) {
+    (root || document).querySelectorAll('[data-wm-copy-text]').forEach(function (el) {
+      if (el.dataset.wmCopyBound) return; el.dataset.wmCopyBound = '1';
+      el.addEventListener('click', function () {
+        var txt = el.getAttribute('data-wm-copy-text') || '';
+        var done = function () { wmToast('已复制', 'success'); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(txt).then(done, function () { fallbackCopy(txt); done(); });
+        } else { fallbackCopy(txt); done(); }
+      });
+    });
+  }
+  // form[data-wm-act]: fetch JSON 提交。成功 = flash+跳转(redirect 或重载当前页);
+  // 失败 = 就地 toast, 表单输入保留(登录失败不清 token)。无 JS = 原生 POST 兜底(渐进增强)。
+  function wmBindForms(root) {
+    (root || document).querySelectorAll('form[data-wm-act]').forEach(function (f) {
+      if (f.dataset.wmFormBound) return; f.dataset.wmFormBound = '1';
+      f.addEventListener('submit', function (ev) {
+        ev.preventDefault();
+        var btn = f.querySelector('button[type="submit"], button:not([type])');
+        if (btn) btn.disabled = true;
+        var restore = function () { if (btn) btn.disabled = false; };
+        wmAction(f.getAttribute('data-wm-act'), wmFields(f), function (d) {
+          if (d.ok) {
+            if (d.flash) wmFlash(d.flash);
+            location.href = d.redirect || location.pathname;
+            return;
+          }
+          restore();
+          wmToast(d.error || '操作失败', 'danger');
+        });
+      });
+    });
+  }
+  function wmBindAll() { wmBindCopyText(); wmBindForms(); }
+  window.wmBindCopyText = wmBindCopyText;
+  window.wmBindForms = wmBindForms;
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', wmDrainFlash);
-  } else { wmDrainFlash(); }
+    document.addEventListener('DOMContentLoaded', function () { wmDrainFlash(); wmBindAll(); });
+  } else { wmDrainFlash(); wmBindAll(); }
 })();

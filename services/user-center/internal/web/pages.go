@@ -42,6 +42,21 @@ const userLayout = `
 {{if eq .Content "pagePurchase"}}{{template "pagePurchase" .PageData}}{{end}}
 </main>
 <script src="/assets/bootstrap.bundle.min.js"></script>
+<script src="/assets/wm-ui.js?v=6"></script>
+<div class="toast-container position-fixed top-0 end-0 p-3" id="wm-toasts" style="z-index:1090"></div>
+<div class="modal" id="wm-confirm" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">确认操作</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body"></div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+        <button type="button" class="btn btn-primary" data-wm-confirm>确认</button>
+      </div>
+    </div>
+  </div>
+</div>
 </body>
 </html>
 {{end}}
@@ -54,7 +69,7 @@ const userLayout = `
       <div class="wm-muted small mt-2">粘贴运营发给你的订阅 token</div>
     </div>
     {{if .Err}}<div class="alert alert-danger py-2 small" role="alert">token 无效或已过期，请核对后重试</div>{{end}}
-    <form method="POST" action="/login" class="d-grid gap-3">
+    <form method="POST" action="/login" data-wm-act="/login" class="d-grid gap-3">
       <input class="form-control form-control-lg" type="text" name="token" placeholder="订阅 token" autofocus required>
       <button class="btn btn-primary btn-lg" type="submit">登录</button>
     </form>
@@ -122,8 +137,7 @@ const userLayout = `
       <h2 class="h6 wm-muted mb-2">订阅链接</h2>
       <div class="input-group">
         <input id="suburl" class="form-control wm-mono" readonly value="{{.SubURL}}">
-        <button class="btn btn-primary" id="copybtn"
-          onclick="navigator.clipboard.writeText(document.getElementById('suburl').value)">复制</button>
+        <button class="btn btn-primary" id="copybtn" data-wm-copy-text="{{.SubURL}}">复制</button>
       </div>
       <div class="text-center mt-4 mb-2">
         <img src="/qr.png" width="200" height="200" alt="订阅二维码" class="wm-qr">
@@ -142,7 +156,7 @@ const userLayout = `
       </div>
       <h2 class="h6 wm-muted">更换 token</h2>
       <p class="wm-muted small mb-2">运营 regenerate 后粘贴新 token, 立即生效</p>
-      <form method="POST" action="/subscription/token" class="input-group">
+      <form method="POST" action="/subscription/token" data-wm-act="/subscription/token" class="input-group">
         <input class="form-control" type="text" name="token" placeholder="新 token" required>
         <button class="btn btn-outline-secondary" type="submit">更换</button>
       </form>
@@ -162,7 +176,7 @@ const userLayout = `
       <h2 class="h5 mb-1">{{.Name}}</h2>
       <div class="wm-muted small mb-3">{{.Price}} 分 · 流量 {{.GBStr}}GB · {{.Days}}天</div>
       <div class="wm-muted small mb-3">未支付需 <strong>联系渠道加量</strong>(MVP 不接支付网关)</div>
-      <form method="POST" action="/purchase" class="mt-auto d-grid">
+      <form method="POST" action="/purchase" data-wm-act="/purchase" class="mt-auto d-grid">
         <input type="hidden" name="plan" value="{{.Name}}">
         <button class="btn btn-primary" type="submit">下单</button>
       </form>

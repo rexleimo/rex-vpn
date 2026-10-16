@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"html/template"
+	"net/url"
 	"net/http"
 	"sync"
 	"time"
@@ -79,6 +80,7 @@ func (s *Server) Router() *gin.Engine {
 	// vendored 静态资产(ADR-0002: 零构建, 无 CDN)
 	e.GET("/assets/bootstrap.min.css", gin.WrapH(webui.AssetHandler("bootstrap.min.css")))
 	e.GET("/assets/bootstrap.bundle.min.js", gin.WrapH(webui.AssetHandler("bootstrap.bundle.min.js")))
+	e.GET("/assets/wm-ui.js", gin.WrapH(webui.AssetHandler("wm-ui.js")))
 
 	auth := e.Group("", s.auth())
 	auth.GET("/dashboard", s.dashboard)
@@ -161,18 +163,30 @@ func (s *Server) loginPage(c *gin.Context) {
 }
 
 func (s *Server) loginPost(c *gin.Context) {
+	jsonMode := webkit.WantsJSON(c) // S3: fetch 提交失败时页面保留输入, 只出 toast
+	replyFail := func(msg string) {
+		if jsonMode {
+			c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": msg})
+			return
+		}
+		c.Redirect(http.StatusSeeOther, "/login?err="+url.QueryEscape(msg))
+	}
 	if !s.rl.Allow(webkit.ClientIP(c.Request)) {
-		c.Redirect(http.StatusSeeOther, "/login?err=限流,请稍后再试")
+		replyFail("限流,请稍后再试")
 		return
 	}
 	token := c.PostForm("token")
 	u, err := s.Marzban.GetUserByToken(c.Request.Context(), token)
 	if err != nil || u.Username == "" {
-		c.Redirect(http.StatusSeeOther, "/login?err=token无效")
+		replyFail("token无效")
 		return
 	}
 	s.session.Revoke(c.Writer, c.Request) // 旧 sid 作废(重复登录不留双会话)
 	s.session.Issue(c.Writer, token)
+	if jsonMode {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "redirect": "/dashboard"})
+		return
+	}
 	c.Redirect(http.StatusSeeOther, "/dashboard")
 }
 
@@ -223,10 +237,19 @@ func (s *Server) subscription(c *gin.Context) {
 // retoken wc-3.3: 更换 token(Marzban regenerate 后重粘) → 重校验 + 重种 cookie。
 func (s *Server) retoken(c *gin.Context) {
 	token := c.PostForm("token")
+	jsonMode := webkit.WantsJSON(c)
 	if u, err := s.Marzban.GetUserByToken(c.Request.Context(), token); err == nil && u.ID != 0 {
 		s.session.Revoke(c.Writer, c.Request)
 		s.session.Issue(c.Writer, token)
+		if jsonMode {
+			c.JSON(http.StatusOK, gin.H{"ok": true, "flash": "已更换 token, 立即生效"})
+			return
+		}
 		c.Redirect(http.StatusSeeOther, "/subscription?changed=1")
+		return
+	}
+	if jsonMode {
+		c.JSON(http.StatusUnauthorized, gin.H{"ok": false, "error": "token无效"})
 		return
 	}
 	c.Redirect(http.StatusSeeOther, "/subscription?err=token无效")
@@ -253,13 +276,25 @@ func (s *Server) purchase(c *gin.Context) {
 
 func (s *Server) createInvoice(c *gin.Context) {
 	plan := c.PostForm("plan")
+	jsonMode := webkit.WantsJSON(c)
+	fail := func(msg string) {
+		if jsonMode {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": msg})
+			return
+		}
+		c.Redirect(http.StatusSeeOther, "/purchase?err="+url.QueryEscape(msg))
+	}
 	if _, ok := s.PlansByName[plan]; !ok {
-		c.Redirect(http.StatusSeeOther, "/purchase?err=无效套餐")
+		fail("无效套餐")
 		return
 	}
 	token, _ := s.currentToken(c.Request)
 	if _, err := s.Marzban.CreateInvoice(c.Request.Context(), token, plan); err != nil {
-		c.Redirect(http.StatusSeeOther, "/purchase?err=下单失败,请稍后重试")
+		fail("下单失败,请稍后重试")
+		return
+	}
+	if jsonMode {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "flash": "已下单, 等待到账…(5s 轮询)"})
 		return
 	}
 	c.Redirect(http.StatusSeeOther, "/purchase?new=1")

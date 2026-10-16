@@ -222,7 +222,7 @@ func TestWebUISnapshot(t *testing.T) {
 	for _, want := range []string{
 		"<title>总览 · vpn-master 管理</title>",
 		`href="/assets/bootstrap.min.css"`, "navbar", "wm-glass",
-		`src="/assets/wm-ui.js"`, `id="wm-toasts"`, `id="wm-confirm"`,
+		`src="/assets/wm-ui.js?v=`, `id="wm-toasts"`, `id="wm-confirm"`,
 		"wm-card", "wm-stat-num", "总览", // 未迁移页过渡样式层仍在
 	} {
 		if !strings.Contains(body, want) {

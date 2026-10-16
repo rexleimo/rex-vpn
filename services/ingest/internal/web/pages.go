@@ -61,7 +61,7 @@ const adminLayout = `
 </div>
 
 <script src="/assets/bootstrap.bundle.min.js"></script>
-<script src="/assets/wm-ui.js"></script>
+<script src="/assets/wm-ui.js?v=6"></script>
 </body>
 </html>
 {{end}}
@@ -98,34 +98,50 @@ const pageTemplates = `
 {{end}}
 
 {{define "pageOverview"}}
-<h1 class="wm-h1">总览</h1>
-<div class="wm-stat">
-  <div class="wm-stat-item"><div class="wm-stat-num">{{.UpstreamCount}}</div><div class="wm-stat-label">上游来源</div></div>
-  <div class="wm-stat-item"><div class="wm-stat-num">{{index .NodeCounts "active"}}</div><div class="wm-stat-label">active 节点</div></div>
-  <div class="wm-stat-item"><div class="wm-stat-num">{{index .NodeCounts "evicted"}}</div><div class="wm-stat-label">evicted 节点</div></div>
-  <div class="wm-stat-item"><div class="wm-stat-num">{{index .NodeCounts "pending"}}</div><div class="wm-stat-label">pending 节点</div></div>
+<h1 class="wm-display fs-2 mb-4">总览</h1>
+<div class="row g-3 mb-4">
+  <div class="col-6 col-lg-3"><div class="card p-4 text-center"><div class="wm-display fs-1">{{.UpstreamCount}}</div><div class="wm-muted small">上游来源</div></div></div>
+  <div class="col-6 col-lg-3"><div class="card p-4 text-center"><div class="wm-display fs-1 text-success">{{index .NodeCounts "active"}}</div><div class="wm-muted small">active 节点</div></div></div>
+  <div class="col-6 col-lg-3"><div class="card p-4 text-center"><div class="wm-display fs-1 text-danger">{{index .NodeCounts "evicted"}}</div><div class="wm-muted small">evicted 节点</div></div></div>
+  <div class="col-6 col-lg-3"><div class="card p-4 text-center"><div class="wm-display fs-1 wm-muted">{{index .NodeCounts "pending"}}</div><div class="wm-muted small">pending 节点</div></div></div>
 </div>
-<section class="wm-card wm-mt">
-  <h2 class="wm-card-title">上游</h2>
-  {{if .Upstreams}}
-  <table class="wm-table">
-    <tr><th>名称</th><th>来源(掩码)</th><th>节点数</th><th>最近成功</th><th>最近错误</th></tr>
-    {{range .Upstreams}}
-    <tr><td>{{.Name}}</td><td class="wm-mono wm-dim">{{.URLMasked}}</td><td>{{.NodeCount}}</td><td>{{.LastOKStr}}</td><td class="wm-dim">{{.LastErr}}</td></tr>
-    {{end}}
-  </table>
-  {{else}}<div class="wm-dim">暂无上游</div>{{end}}
-</section>
-<section class="wm-card">
-  <h2 class="wm-card-title">最近事件</h2>
-  {{if .RecentEvents}}
-  <ul class="wm-timeline">
-    {{range .RecentEvents}}
-    <li><span class="wm-kind">{{.Kind}}</span><span class="wm-dim">{{.AtStr}}</span><span>{{.From}} → {{.To}}</span><span class="wm-mono wm-dim">{{.NodeFP}}</span><span class="wm-dim">{{.Detail}}</span></li>
-    {{end}}
-  </ul>
-  {{else}}<div class="wm-dim">暂无事件</div>{{end}}
-</section>
+<div class="row g-3">
+  <div class="col-12 col-lg-6">
+    <div class="card p-4 h-100">
+      <h2 class="h6 wm-muted mb-3">上游</h2>
+      {{if .Upstreams}}
+      <div class="table-responsive">
+      <table class="table table-hover align-middle mb-0">
+        <thead><tr><th>名称</th><th>节点</th><th>最近成功</th><th>最近错误</th></tr></thead>
+        <tbody>
+        {{range .Upstreams}}
+          <tr><td class="fw-semibold">{{.Name}}</td><td>{{.NodeCount}}</td><td class="wm-muted small">{{.LastOKStr}}</td><td class="wm-muted small">{{.LastErr}}</td></tr>
+        {{end}}
+        </tbody>
+      </table>
+      </div>
+      {{else}}<div class="wm-muted">暂无上游</div>{{end}}
+    </div>
+  </div>
+  <div class="col-12 col-lg-6">
+    <div class="card p-4 h-100">
+      <h2 class="h6 wm-muted mb-3">最近事件</h2>
+      {{if .RecentEvents}}
+      <ul class="list-group list-group-flush">
+        {{range .RecentEvents}}
+        <li class="list-group-item d-flex flex-wrap gap-2 align-items-center px-0">
+          {{template "badge" (dict "Text" .Kind "Variant" .KindVar)}}
+          <span class="wm-muted small">{{.AtStr}}</span>
+          <span class="wm-mono wm-muted">{{substr .NodeFP 0 8}}</span>
+          {{if .From}}<span class="small">{{.From}} → {{.To}}</span>{{end}}
+          <span class="wm-muted small flex-grow-1">{{.Detail}}</span>
+        </li>
+        {{end}}
+      </ul>
+      {{else}}<div class="wm-muted">暂无事件</div>{{end}}
+    </div>
+  </div>
+</div>
 {{end}}
 
 {{define "pageUpstreams"}}
@@ -399,17 +415,30 @@ function wmEditSave(ev, form){
 {{end}}
 
 {{define "pageUsers"}}
-<h1 class="wm-h1">用户(只读)</h1>
-{{if .ErrText}}<div class="wm-alert wm-alert-warn">{{.ErrText}}</div>{{end}}
-{{if and .Configured .Users}}
-<section class="wm-card">
-  <table class="wm-table">
-    <tr><th>ID</th><th>用户名</th><th>状态</th><th>到期</th></tr>
+<h1 class="wm-display fs-2 mb-4">用户(只读)</h1>
+{{if .ErrText}}<div class="alert alert-warning py-2 small">{{.ErrText}}</div>{{end}}
+<div class="card p-4">
+  <form class="row g-2 mb-3" method="GET" action="/admin/users">
+    <div class="col-12 col-md-6"><input class="form-control" name="q" placeholder="搜索用户名 / ID" value="{{.Q}}"></div>
+    <div class="col-6 col-md-2 d-grid"><button class="btn btn-primary" type="submit">查询</button></div>
+  </form>
+  {{if .Users}}
+  <div class="table-responsive">
+  <table class="table table-hover align-middle mb-0">
+    <thead><tr><th>ID</th><th>用户名</th><th>状态</th><th>到期</th><th>流量</th></tr></thead>
+    <tbody>
     {{range .Users}}
-    <tr><td class="wm-mono wm-dim">{{.ID}}</td><td>{{.Username}}</td><td>{{.Status}}</td><td>{{.ExpireStr}}</td></tr>
+      <tr><td class="wm-mono wm-muted">{{.ID}}</td><td class="fw-semibold">{{.Username}}</td>
+          <td>{{template "badge" (dict "Text" .Status "Variant" .StatusVar)}}</td>
+          <td class="wm-muted small">{{.ExpireStr}}</td><td class="wm-muted small">{{.TrafficStr}}</td></tr>
     {{end}}
+    </tbody>
   </table>
-</section>
-{{end}}
+  </div>
+  <div class="wm-muted small mt-2">共 {{len .Users}} 个用户{{if .Q}}(过滤: {{.Q}}){{end}}</div>
+  {{else}}
+  <div class="wm-muted text-center py-4">{{if .Configured}}无匹配用户{{else}}不可用{{end}}</div>
+  {{end}}
+</div>
 {{end}}
 `

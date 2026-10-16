@@ -80,11 +80,15 @@ func (c *MarzbanClient) ListUsers(ctx context.Context) ([]User, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("marzban /api/users: %s: %s", resp.Status, truncate(string(body), 200))
 	}
-	// marzban 返回 {data: [...], ...} 或直接 [...], 兼容两种。
+	// marzban 返回 {users: [...], total: N}; 旧版/其他部署可能 {data:[...]} 或直接 [...], 兼容三种。
 	var wrap struct {
-		Data []User `json:"data"`
+		Users []User `json:"users"`
+		Data  []User `json:"data"`
 	}
 	var direct []User
+	if err := json.Unmarshal(body, &wrap); err == nil && len(wrap.Users) > 0 {
+		return wrap.Users, nil
+	}
 	if err := json.Unmarshal(body, &wrap); err == nil && len(wrap.Data) > 0 {
 		return wrap.Data, nil
 	}
@@ -104,7 +108,7 @@ func (c *MarzbanClient) ensureToken(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("MARZBAN_ADMIN_USER/PASSWORD 未配置")
 	}
 	form := url.Values{"username": {c.adminU}, "password": {c.adminP}}
-	resp, err := c.client.PostForm(c.base+"/api/login", form)
+	resp, err := c.client.PostForm(c.base+"/api/admin/token", form)
 	if err != nil {
 		return "", err
 	}
