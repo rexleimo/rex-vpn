@@ -4,6 +4,9 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
+  # Windows bind-mount 下 fsnotify 不触发容器内事件: 轮询兜底(air v1.67: build.poll)
+  poll = true
+  poll_interval = 1000
   cmd = "go build -o ./tmp/uc-bin ./cmd/user-center"
   bin = "./tmp/uc-bin"
 

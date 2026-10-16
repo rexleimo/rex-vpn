@@ -6,6 +6,7 @@ RUN go install github.com/air-verse/air@latest
 WORKDIR /src
 COPY user-center/.air.toml .air.toml
 COPY webui/go.mod ./webui/go.mod
+COPY webkit/go.mod ./webkit/go.mod
 COPY user-center/go.mod ./user-center/go.mod
 COPY user-center/go.sum ./user-center/go.sum
 RUN cd user-center && go mod download || true

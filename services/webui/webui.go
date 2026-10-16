@@ -16,16 +16,56 @@ import (
 	"time"
 )
 
-//go:embed components.html app.css
+//go:embed components.html app.css theme.css dist/bootstrap.min.css dist/bootstrap.bundle.min.js
 var assets embed.FS
 
-// CSS 返回组件库样式(页面 <head> 内联)。
+// CSS 返回组件库样式(页面 <head> 内联)。旧 token 层, admin 未迁移前保留(ADR-0002 后果)。
 func CSS() string {
 	b, err := assets.ReadFile("app.css")
 	if err != nil {
 		return ""
 	}
 	return string(b)
+}
+
+// ThemeCSS 返回 Bootstrap 之上的 Apple 风主题层(小体积, 页面内联)。
+// 返回 template.CSS: 嵌入内容受信, 跳过 html/template 在 <style> 上下文的净化(否则输出 ZgotmplZ)。
+func ThemeCSS() template.CSS {
+	b, err := assets.ReadFile("theme.css")
+	if err != nil {
+		return ""
+	}
+	return template.CSS(b)
+}
+
+// Asset 返回 vendored 静态资产(bootstrap css/js)内容与 MIME。
+func Asset(name string) ([]byte, string, bool) {
+	switch name {
+	case "bootstrap.min.css", "bootstrap.bundle.min.js":
+		b, err := assets.ReadFile("dist/" + name)
+		if err != nil {
+			return nil, "", false
+		}
+			if strings.HasSuffix(name, ".js") {
+			return b, "application/javascript; charset=utf-8", true
+		}
+		return b, "text/css; charset=utf-8", true
+	}
+	return nil, "", false
+}
+
+// AssetHandler 供各服务挂 /assets/<name>(gin 兼容 http.HandlerFunc)。
+func AssetHandler(name string) http.HandlerFunc {
+	body, mime, ok := Asset(name)
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", mime)
+		w.Header().Set("Cache-Control", "public, max-age=604800, immutable")
+		_, _ = w.Write(body)
+	}
 }
 
 func componentsSrc() string {

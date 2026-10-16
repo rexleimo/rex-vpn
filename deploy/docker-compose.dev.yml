@@ -43,6 +43,7 @@ services:
     volumes:
       - ../services/user-center:/src
       - ../services/webui:/webui
+      - ../services/webkit:/webkit   # gin 共享中间件套件(replace 目录), air 热重载实时生效
     ports: ["9200:9200"]   # user-center 调试
     environment:
       USERCENTER_ADDR: :9200

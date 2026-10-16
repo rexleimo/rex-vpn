@@ -4,8 +4,11 @@ deploy/.env
 
 # 运行产物
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 /out/
-dist/
+/dist/
 node_modules/
 
 # 二进制
@@ -18,3 +21,8 @@ node_modules/
 # 本地
 .DS_Store
 .aios/
+.rex-harness/
+
+# 验收截图(本地产物, 不入库)
+.shots/
+

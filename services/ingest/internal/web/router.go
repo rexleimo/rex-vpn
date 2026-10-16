@@ -8,14 +8,18 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"vpnmaster/ingest/internal/db"
 	"vpnmaster/ingest/internal/out"
 	"vpnmaster/ingest/internal/probe"
 	"vpnmaster/ingest/internal/sub"
+	"vpnmaster/webkit"
 	"vpnmaster/webui"
 )
+
 // Handler 是 ingest 内嵌的 web 层(SSR 管理页 + JSON API, work-7)。
 // 不做前后分离: 页面服务端渲染, vanilla JS 只做 5s 轮询刷新表格(7.3)。
+// Web 层 = gin + webkit 共享套件(ADR-0001)。
 type Handler struct {
 	Store    *db.Store
 	Poller   *sub.Poller // 可 nil(无来源时禁用手动拉取)
@@ -116,103 +120,100 @@ func triggerXraygen(ctx context.Context, h *Handler) error {
 	return err
 }
 
-// Router 挂载全部路由。/api/healthz 开放, 其余 /admin 与 /api 需会话。
-func (h *Handler) Router() *http.ServeMux {
-	mux := http.NewServeMux()
+const adminCSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data:; object-src 'none'; frame-ancestors 'self'"
 
-	mux.HandleFunc("GET /login", h.loginPage)
-	mux.HandleFunc("POST /login", h.loginPost)
-	mux.HandleFunc("GET /logout", h.logout)
+// Router 挂载全部路由(gin.Engine 即 http.Handler)。/api/healthz 开放, 其余 /admin 与 /api 需会话。
+func (h *Handler) Router() *gin.Engine {
+	gin.SetMode(gin.ReleaseMode)
+	e := gin.New()
+	e.Use(gin.Recovery(), webkit.SecurityHeaders(adminCSP))
 
-	mux.HandleFunc("GET /admin", h.guard(h.overview))
-	mux.HandleFunc("GET /admin/upstreams", h.guard(h.upstreams))
-	mux.HandleFunc("POST /admin/upstreams", h.guard(h.upstreamAdd))
-	mux.HandleFunc("POST /admin/upstreams/delete", h.guard(h.upstreamDelete))
-	mux.HandleFunc("POST /admin/upstreams/fetch", h.guard(h.upstreamFetch))
-	mux.HandleFunc("GET /admin/nodes", h.guard(h.nodes))
-	mux.HandleFunc("POST /admin/nodes/evict", h.guard(h.nodeEvict))
-	mux.HandleFunc("POST /admin/nodes/recover", h.guard(h.nodeRecover))
-	mux.HandleFunc("GET /admin/events", h.guard(h.events))
-	mux.HandleFunc("GET /admin/users", h.guard(h.users))
+	e.GET("/login", h.loginPage)
+	e.POST("/login", h.loginPost)
+	e.GET("/logout", h.logout)
+	e.GET("/api/healthz", h.apiHealthz)
+	e.GET("/", func(c *gin.Context) { c.Redirect(http.StatusSeeOther, "/admin") })
 
-	mux.HandleFunc("GET /api/healthz", h.apiHealthz)
-	mux.HandleFunc("GET /api/upstreams", h.guardAPI(h.apiUpstreams))
-	mux.HandleFunc("GET /api/nodes", h.guardAPI(h.apiNodes))
-	mux.HandleFunc("GET /api/events", h.guardAPI(h.apiEvents))
-	mux.HandleFunc("GET /api/users", h.guardAPI(h.apiUsers))
+	ad := e.Group("/admin", h.guard())
+	ad.GET("", h.overview)
+	ad.GET("/upstreams", h.upstreams)
+	ad.POST("/upstreams", h.upstreamAdd)
+	ad.POST("/upstreams/delete", h.upstreamDelete)
+	ad.POST("/upstreams/fetch", h.upstreamFetch)
+	ad.GET("/nodes", h.nodes)
+	ad.POST("/nodes/evict", h.nodeEvict)
+	ad.POST("/nodes/recover", h.nodeRecover)
+	ad.GET("/events", h.events)
+	ad.GET("/users", h.users)
 
-	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/admin", http.StatusSeeOther)
-	})
-	return mux
+	api := e.Group("/api", h.guardAPI())
+	api.GET("/upstreams", h.apiUpstreams)
+	api.GET("/nodes", h.apiNodes)
+	api.GET("/events", h.apiEvents)
+	api.GET("/users", h.apiUsers)
+
+	return e
 }
 
-// guard HTML 页会话门槛(未登录 302 → /login)。
-func (h *Handler) guard(f func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		h.Session.Guard(w, r, func(w http.ResponseWriter, r *http.Request) {
-			f(w, r)
-		})
+// guard HTML 页会话门槛(未登录 303 → /login)。
+func (h *Handler) guard() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !h.Session.LoggedIn(c.Request) {
+			c.Redirect(http.StatusSeeOther, "/login")
+			c.Abort()
+			return
+		}
+		c.Next()
 	}
 }
 
 // guardAPI JSON 会话门槛(未登录 401)。
-func (h *Handler) guardAPI(f func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		tok := ""
-		if c, err := r.Cookie(cookieName); err == nil {
-			tok = c.Value
-		}
-		if !h.Session.Valid(tok) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+func (h *Handler) guardAPI() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !h.Session.LoggedIn(c.Request) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "unauthorized"})
 			return
 		}
-		f(w, r)
+		c.Next()
 	}
 }
 
 // ---- 登录/登出 ----
 
-func (h *Handler) loginPage(w http.ResponseWriter, r *http.Request) {
-	webui.WritePage(w, h.Template, "layout", Page{
+func (h *Handler) loginPage(c *gin.Context) {
+	webui.WritePage(c.Writer, h.Template, "layout", Page{
 		Title: "登录", CSS: webui.CSS(), Content: "login",
-		PageData: map[string]any{"Err": r.URL.Query().Get("err") != ""},
+		PageData: map[string]any{"Err": c.Query("err") != ""},
 	})
 }
 
-func (h *Handler) loginPost(w http.ResponseWriter, r *http.Request) {
-	pw := r.FormValue("password")
+func (h *Handler) loginPost(c *gin.Context) {
+	pw := c.PostForm("password")
 	if !h.Session.LoginOK(pw) {
-		http.Redirect(w, r, "/login?err=1", http.StatusSeeOther)
+		c.Redirect(http.StatusSeeOther, "/login?err=1")
 		return
 	}
-	h.Session.Issue(w)
-	http.Redirect(w, r, "/admin", http.StatusSeeOther)
+	h.Session.Issue(c.Writer)
+	c.Redirect(http.StatusSeeOther, "/admin")
 }
 
-func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
-	tok := ""
-	if c, err := r.Cookie(cookieName); err == nil {
-		tok = c.Value
-	}
-	h.Session.Revoke(w, tok)
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
+func (h *Handler) logout(c *gin.Context) {
+	h.Session.Revoke(c.Writer, c.Request)
+	c.Redirect(http.StatusSeeOther, "/login")
 }
 
 // ---- SSR 页 ----
 
-func (h *Handler) page(w http.ResponseWriter, p Page) {
+func (h *Handler) page(c *gin.Context, p Page) {
 	if h.Prober != nil {
 		p.Degraded = h.Prober.Degraded()
 	}
 	p.CSS = webui.CSS()
-	webui.WritePage(w, h.Template, "layout", p)
+	webui.WritePage(c.Writer, h.Template, "layout", p)
 }
 
-func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func (h *Handler) overview(c *gin.Context) {
+	ctx := c.Request.Context()
 	ups, _ := h.Store.ListUpstreams(ctx)
 	nodes, _ := h.Store.ListNodes(ctx, "")
 	evs, _ := h.Store.ListEvents(ctx, 12)
@@ -225,7 +226,7 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 		uc, _ := h.Store.CountNodesBySource(ctx, u.Name)
 		uviews = append(uviews, h.upstreamView(u, uc))
 	}
-	h.page(w, Page{Title: "总览", Active: "overview", Content: "pageOverview",
+	h.page(c, Page{Title: "总览", Active: "overview", Content: "pageOverview",
 		PageData: OverviewData{
 			UpstreamCount: len(ups),
 			NodeCounts:    counts,
@@ -234,39 +235,39 @@ func (h *Handler) overview(w http.ResponseWriter, r *http.Request) {
 		}})
 }
 
-func (h *Handler) upstreams(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func (h *Handler) upstreams(c *gin.Context) {
+	ctx := c.Request.Context()
 	ups, _ := h.Store.ListUpstreams(ctx)
 	views := make([]UpstreamView, 0, len(ups))
 	for _, u := range ups {
 		uc, _ := h.Store.CountNodesBySource(ctx, u.Name)
 		views = append(views, h.upstreamView(u, uc))
 	}
-	h.page(w, Page{Title: "上游", Active: "upstreams", Content: "pageUpstreams",
-		PageData: UpstreamsData{Upstreams: views, CanFetch: h.Poller != nil, Err: r.URL.Query().Get("err")}})
+	h.page(c, Page{Title: "上游", Active: "upstreams", Content: "pageUpstreams",
+		PageData: UpstreamsData{Upstreams: views, CanFetch: h.Poller != nil, Err: c.Query("err")}})
 }
 
-func (h *Handler) nodes(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+func (h *Handler) nodes(c *gin.Context) {
+	ctx := c.Request.Context()
 	rows, _ := h.Store.ListNodes(ctx, "")
 	views := make([]NodeView, 0, len(rows))
 	for _, n := range rows {
 		views = append(views, h.nodeView(n))
 	}
-	h.page(w, Page{Title: "节点", Active: "nodes", Content: "pageNodes", PageData: NodesData{Nodes: views}})
+	h.page(c, Page{Title: "节点", Active: "nodes", Content: "pageNodes", PageData: NodesData{Nodes: views}})
 }
 
-func (h *Handler) events(w http.ResponseWriter, r *http.Request) {
-	evs, _ := h.Store.ListEvents(r.Context(), 200)
-	h.page(w, Page{Title: "事件", Active: "events", Content: "pageEvents",
+func (h *Handler) events(c *gin.Context) {
+	evs, _ := h.Store.ListEvents(c.Request.Context(), 200)
+	h.page(c, Page{Title: "事件", Active: "events", Content: "pageEvents",
 		PageData: EventsData{Events: eventViews(evs)}})
 }
 
-func (h *Handler) users(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) users(c *gin.Context) {
 	var d UsersData
 	if h.Marzban == nil {
 		d = UsersData{ErrText: "MARZBAN_API_BASE 未配置, 用户页不可用 (work-6 联调后启用)"}
-	} else if users, err := h.Marzban.ListUsers(r.Context()); err != nil {
+	} else if users, err := h.Marzban.ListUsers(c.Request.Context()); err != nil {
 		d = UsersData{Configured: true, ErrText: err.Error(), Users: []UserView{}}
 	} else {
 		views := make([]UserView, 0, len(users))
@@ -278,83 +279,83 @@ func (h *Handler) users(w http.ResponseWriter, r *http.Request) {
 				exp = "never"
 			}
 			views = append(views, UserView{
-			ID: u.ID, Username: u.Username, Status: u.Status,
-			ExpireStr: exp,
-			TrafficStr: fmt.Sprintf("%d↑/%d↓", u.TotalUpload, u.TotalDownload),
+				ID: u.ID, Username: u.Username, Status: u.Status,
+				ExpireStr: exp,
+				TrafficStr: fmt.Sprintf("%d↑/%d↓", u.TotalUpload, u.TotalDownload),
 			})
 		}
 		d = UsersData{Configured: true, Users: views}
 	}
-	h.page(w, Page{Title: "用户", Active: "users", Content: "pageUsers", PageData: d})
+	h.page(c, Page{Title: "用户", Active: "users", Content: "pageUsers", PageData: d})
 }
 
 // ---- 管理操作 (7.2) ----
 
-func (h *Handler) upstreamAdd(w http.ResponseWriter, r *http.Request) {
-	name := r.FormValue("name")
-	url := r.FormValue("url")
+func (h *Handler) upstreamAdd(c *gin.Context) {
+	name := c.PostForm("name")
+	url := c.PostForm("url")
 	if name == "" || url == "" {
-		http.Redirect(w, r, "/admin/upstreams?err=必填", http.StatusSeeOther)
+		c.Redirect(http.StatusSeeOther, "/admin/upstreams?err=必填")
 		return
 	}
-	if _, err := h.Store.AddUpstream(r.Context(), name, url); err != nil {
-		http.Redirect(w, r, "/admin/upstreams?err="+err.Error(), http.StatusSeeOther)
+	if _, err := h.Store.AddUpstream(c.Request.Context(), name, url); err != nil {
+		c.Redirect(http.StatusSeeOther, "/admin/upstreams?err="+err.Error())
 		return
 	}
 	// 新来源需进 poller 来源清单才能周期拉取: MVP 只入库 + 立即拉一次
 	if h.Poller != nil {
 		h.Poller.AddSource(sub.Source{Name: name, URL: url})
-		_ = h.Poller.PollOnceFor(r.Context(), name)
+		_ = h.Poller.PollOnceFor(c.Request.Context(), name)
 	}
-	http.Redirect(w, r, "/admin/upstreams", http.StatusSeeOther)
+	c.Redirect(http.StatusSeeOther, "/admin/upstreams")
 }
 
-func (h *Handler) upstreamDelete(w http.ResponseWriter, r *http.Request) {
-	name := r.FormValue("name")
-	if err := h.Store.DeleteUpstream(r.Context(), name); err != nil {
-		http.Redirect(w, r, "/admin/upstreams?err="+err.Error(), http.StatusSeeOther)
+func (h *Handler) upstreamDelete(c *gin.Context) {
+	name := c.PostForm("name")
+	if err := h.Store.DeleteUpstream(c.Request.Context(), name); err != nil {
+		c.Redirect(http.StatusSeeOther, "/admin/upstreams?err="+err.Error())
 		return
 	}
-	http.Redirect(w, r, "/admin/upstreams", http.StatusSeeOther)
+	c.Redirect(http.StatusSeeOther, "/admin/upstreams")
 }
 
-func (h *Handler) upstreamFetch(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) upstreamFetch(c *gin.Context) {
 	if h.Poller == nil {
-		http.Redirect(w, r, "/admin/upstreams?err=无已配置上游", http.StatusSeeOther)
+		c.Redirect(http.StatusSeeOther, "/admin/upstreams?err=无已配置上游")
 		return
 	}
-	name := r.FormValue("name")
+	name := c.PostForm("name")
 	if name != "" {
-		if errs := h.Poller.PollOnceFor(r.Context(), name); len(errs) > 0 {
-			http.Redirect(w, r, "/admin/upstreams?err="+fmt.Sprint(errs[0]), http.StatusSeeOther)
+		if errs := h.Poller.PollOnceFor(c.Request.Context(), name); len(errs) > 0 {
+			c.Redirect(http.StatusSeeOther, "/admin/upstreams?err="+fmt.Sprint(errs[0]))
 			return
 		}
 	} else {
-		_ = h.Poller.PollOnce(r.Context())
+		_ = h.Poller.PollOnce(c.Request.Context())
 	}
-	http.Redirect(w, r, "/admin/upstreams", http.StatusSeeOther)
+	c.Redirect(http.StatusSeeOther, "/admin/upstreams")
 }
 
-func (h *Handler) nodeEvict(w http.ResponseWriter, r *http.Request) {
-	fp := r.FormValue("fp")
-	if _, err := h.Store.Evict(r.Context(), fp); err == nil {
+func (h *Handler) nodeEvict(c *gin.Context) {
+	fp := c.PostForm("fp")
+	if _, err := h.Store.Evict(c.Request.Context(), fp); err == nil {
 		// 手动摘除立即触发一次 xraygen(5.2 触发链)
-		_ = triggerXraygen(r.Context(), h)
+		_ = triggerXraygen(c.Request.Context(), h)
 	}
-	http.Redirect(w, r, "/admin/nodes", http.StatusSeeOther)
+	c.Redirect(http.StatusSeeOther, "/admin/nodes")
 }
 
-func (h *Handler) nodeRecover(w http.ResponseWriter, r *http.Request) {
-	fp := r.FormValue("fp")
-	if _, err := h.Store.Recover(r.Context(), fp); err == nil {
-		_ = triggerXraygen(r.Context(), h)
+func (h *Handler) nodeRecover(c *gin.Context) {
+	fp := c.PostForm("fp")
+	if _, err := h.Store.Recover(c.Request.Context(), fp); err == nil {
+		_ = triggerXraygen(c.Request.Context(), h)
 	}
-	http.Redirect(w, r, "/admin/nodes", http.StatusSeeOther)
+	c.Redirect(http.StatusSeeOther, "/admin/nodes")
 }
 
 // ---- JSON API (7.4): 供轮询(7.3)/未来客户端/监控 ----
 
-func (h *Handler) apiHealthz(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiHealthz(c *gin.Context) {
 	degraded := false
 	if h.Prober != nil {
 		degraded = h.Prober.Degraded()
@@ -363,48 +364,48 @@ func (h *Handler) apiHealthz(w http.ResponseWriter, r *http.Request) {
 	if degraded {
 		status = http.StatusServiceUnavailable
 	}
-	writeJSON(w, status, map[string]any{"status": "ok", "degraded": degraded})
+	writeJSON(c.Writer, status, map[string]any{"status": "ok", "degraded": degraded})
 }
 
-func (h *Handler) apiUpstreams(w http.ResponseWriter, r *http.Request) {
-	ups, _ := h.Store.ListUpstreams(r.Context())
+func (h *Handler) apiUpstreams(c *gin.Context) {
+	ups, _ := h.Store.ListUpstreams(c.Request.Context())
 	out := make([]map[string]any, 0, len(ups))
 	for _, u := range ups {
-		uc, _ := h.Store.CountNodesBySource(r.Context(), u.Name)
+		uc, _ := h.Store.CountNodesBySource(c.Request.Context(), u.Name)
 		out = append(out, map[string]any{
 			"name": u.Name, "url_masked": u.URLMasked,
 			"last_ok_at": u.LastOKAt.Format(time.RFC3339), "last_err": u.LastErr,
 			"node_count": uc,
 		})
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(c.Writer, http.StatusOK, out)
 }
 
-func (h *Handler) apiNodes(w http.ResponseWriter, r *http.Request) {
-	rows, _ := h.Store.ListNodes(r.Context(), "")
+func (h *Handler) apiNodes(c *gin.Context) {
+	rows, _ := h.Store.ListNodes(c.Request.Context(), "")
 	views := make([]NodeView, 0, len(rows))
 	for _, n := range rows {
 		views = append(views, h.nodeView(n))
 	}
-	writeJSON(w, http.StatusOK, views)
+	writeJSON(c.Writer, http.StatusOK, views)
 }
 
-func (h *Handler) apiEvents(w http.ResponseWriter, r *http.Request) {
-	evs, _ := h.Store.ListEvents(r.Context(), 200)
-	writeJSON(w, http.StatusOK, eventViews(evs))
+func (h *Handler) apiEvents(c *gin.Context) {
+	evs, _ := h.Store.ListEvents(c.Request.Context(), 200)
+	writeJSON(c.Writer, http.StatusOK, eventViews(evs))
 }
 
-func (h *Handler) apiUsers(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) apiUsers(c *gin.Context) {
 	if h.Marzban == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "marzban not configured"})
+		writeJSON(c.Writer, http.StatusServiceUnavailable, map[string]any{"error": "marzban not configured"})
 		return
 	}
-	users, err := h.Marzban.ListUsers(r.Context())
+	users, err := h.Marzban.ListUsers(c.Request.Context())
 	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		writeJSON(c.Writer, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, users)
+	writeJSON(c.Writer, http.StatusOK, users)
 }
 
 // ---- 视图辅助 ----

@@ -42,7 +42,7 @@ func login(t *testing.T, h *Handler) *httptest.ResponseRecorder {
 func withCookie(t *testing.T, rec *httptest.ResponseRecorder) http.Cookie {
 	t.Helper()
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == cookieName {
+		if c.Name == adminCookie {
 			return *c
 		}
 	}

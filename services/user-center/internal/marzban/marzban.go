@@ -30,7 +30,7 @@ type User struct {
 	ID           int64
 	Username     string
 	Status       string // "active" | "banned" | "expired"
-	ExpireDays   int    // 套餐时长(天), 0=不限时
+	ExpireDays   int    // Marzban expire 实为 unix 时间戳(历史命名遗留); 渲染见 web.fmtExpire
 	LimitTraffic int64  // 字节配额, 0=不限量
 	UsedTraffic  int64  // 已用字节
 	Online       bool
@@ -195,7 +195,7 @@ type marzbanUser struct {
 	ID          int64  `json:"id"`
 	Username    string `json:"username"`
 	Status      string `json:"status"`
-	Expire      int    `json:"expire"` // 天, null=不限时
+	Expire      int    `json:"expire"` // unix 时间戳, 0/null=不限时
 	DataLimit   int64  `json:"data_limit"`
 	UsedTraffic int64  `json:"used_traffic"`
 	OnlineAt    string `json:"online_at"`

@@ -1,0 +1,88 @@
+/* theme.css: Bootstrap 5 之上的 Apple 风主题层 (ADR-0002)。设计语言: 大留白/圆角卡片/系统字体/克制配色; 骨架用 Bootstrap 类, 微调集中在此。 */
+
+:root {
+  --wm-ink: #1d1d1f;
+  --wm-ink-2: #6e6e73;
+  --wm-bg: #f5f5f7;
+  --wm-surface: #ffffff;
+  --wm-accent: #0071e3;
+  --wm-accent-hover: #0077ed;
+  --wm-hairline: rgba(0, 0, 0, .08);
+  --wm-radius-lg: 18px;
+  --wm-radius-md: 12px;
+  --wm-shadow-soft: 0 4px 24px rgba(0, 0, 0, .06);
+  --wm-shadow-pop: 0 8px 32px rgba(0, 0, 0, .12);
+
+  --bs-body-bg: var(--wm-bg);
+  --bs-body-color: var(--wm-ink);
+  --bs-border-color: var(--wm-hairline);
+  --bs-link-color: var(--wm-accent);
+  --bs-link-hover-color: var(--wm-accent-hover);
+
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
+    Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+body { background: var(--wm-bg); color: var(--wm-ink); letter-spacing: -0.01em; }
+
+/* 导航: 毛玻璃 + 细发丝线 */
+.navbar.wm-glass {
+  background: rgba(255, 255, 255, .72);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 1px solid var(--wm-hairline);
+}
+.wm-brand { font-weight: 700; letter-spacing: -0.02em; color: var(--wm-ink) !important; }
+
+/* 卡片: 无边框大圆角柔影 */
+.card {
+  border: 0; border-radius: var(--wm-radius-lg);
+  background: var(--wm-surface); box-shadow: var(--wm-shadow-soft);
+}
+.card-header, .card-footer { background: transparent; border-color: var(--wm-hairline); }
+
+/* 按钮: Apple 胶囊 */
+.btn { border-radius: 980px; font-weight: 500; padding-inline: 1.15rem; }
+.btn-primary { background: var(--wm-accent); border-color: var(--wm-accent); }
+.btn-primary:hover, .btn-primary:focus { background: var(--wm-accent-hover); border-color: var(--wm-accent-hover); }
+.btn-outline-secondary { border-color: var(--wm-hairline); color: var(--wm-ink); }
+.btn-outline-secondary:hover { background: rgba(0,0,0,.04); border-color: var(--wm-hairline); color: var(--wm-ink); }
+
+/* 表单 */
+.form-control, .input-group-text { border-radius: var(--wm-radius-md); border-color: var(--wm-hairline); }
+.form-control:focus { border-color: var(--wm-accent); box-shadow: 0 0 0 .2rem rgba(0, 113, 227, .12); }
+
+/* 进度条 */
+.progress { border-radius: 980px; background: rgba(120, 120, 128, .16); height: .65rem; }
+.progress-bar { background: var(--wm-accent); border-radius: 980px; }
+
+/* 徽章: 柔和胶囊 */
+.badge { border-radius: 980px; font-weight: 600; padding: .35em .9em; letter-spacing: 0; }
+.text-bg-success { background: #e6f7ec !important; color: #1c7c3c !important; }
+.text-bg-danger { background: #fdeceb !important; color: #c0392b !important; }
+.text-bg-warning { background: #fdf3e3 !important; color: #9a6b1f !important; }
+.text-bg-info { background: #e8f1fe !important; color: #2b5fb0 !important; }
+.text-bg-secondary { background: #ececee !important; color: #6e6e73 !important; }
+
+/* 表格: 去硬边框, 表头小字距 */
+.table { --bs-table-border-color: var(--wm-hairline); }
+.table > thead th {
+  font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--wm-ink-2); border-bottom: 1px solid var(--wm-hairline);
+}
+
+/* 排版层次 */
+.wm-display { font-weight: 700; letter-spacing: -0.025em; }
+.wm-muted { color: var(--wm-ink-2); }
+.wm-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82em; }
+
+/* 列表组(指引/条目) */
+.list-group-item { border-color: var(--wm-hairline); background: transparent; }
+
+/* 登录卡: 居中浮层 */
+.wm-auth-wrap { min-height: 100vh; background:
+  radial-gradient(1200px 600px at 50% -10%, #e7f0ff 0%, var(--wm-bg) 60%); }
+.wm-auth-card { box-shadow: var(--wm-shadow-pop); border-radius: 22px; }
+
+/* 二维码容器 */
+.wm-qr { image-rendering: pixelated; border-radius: var(--wm-radius-md); }

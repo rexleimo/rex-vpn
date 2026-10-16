@@ -30,7 +30,7 @@ func loginCookie(t *testing.T, s *Server) *http.Cookie {
 		t.Fatalf("login = %d, want 302", rec.Code)
 	}
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == cookieName && c.Value != "" { // 取真正的会话 cookie(非 clearSession 的空 cookie)
+		if c.Name == sessionCookie && c.Value != "" { // 取真正的会话 cookie(非 clearSession 的空 cookie)
 			if !c.HttpOnly {
 				t.Error("session cookie must be HttpOnly (wc-5.1)")
 			}
@@ -83,7 +83,7 @@ func TestPagesAuthAndRender(t *testing.T) {
 	req.AddCookie(cookie)
 	mux.ServeHTTP(rec, req)
 	body := rec.Body.String()
-	for _, want := range []string{`<input class="wm-input" id="suburl"`, "订阅二维码", "/qr.png", "更换 token"} {
+	for _, want := range []string{`id="suburl" class="form-control wm-mono"`, "订阅二维码", "/qr.png", "更换 token"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("subscription page missing %q", want)
 		}
