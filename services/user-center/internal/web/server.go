@@ -17,6 +17,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	qr "github.com/skip2/go-qrcode"
+	"vpnmaster/user-center/internal/accounts"
 	"vpnmaster/user-center/internal/marzban"
 	"vpnmaster/webkit"
 	"vpnmaster/webui"
@@ -36,6 +37,7 @@ type Server struct {
 
 	session *webkit.Session
 	rl      *webkit.RateLimiter
+	accounts *accounts.Service // nil = 账号体系未启用(WI-2 渐进集成)
 
 	mu    sync.Mutex
 	cache map[string]cacheEntry // token -> 最近一次解析(30s), 防 5s 轮询打爆 Marzban
@@ -71,6 +73,7 @@ func (s *Server) Router() *gin.Engine {
 	gin.SetMode(gin.ReleaseMode)
 	e := gin.New()
 	e.Use(gin.Recovery(), webkit.SecurityHeaders(csp))
+	s.mountAccounts(e) // authkit 路由(未接账号体系时 no-op)
 
 	e.GET("/", s.root)
 	e.GET("/login", s.loginPage)

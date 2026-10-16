@@ -3,10 +3,12 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
 
+	"vpnmaster/user-center/internal/accounts"
 	"vpnmaster/user-center/internal/marzban"
 	"vpnmaster/user-center/internal/web"
 )
@@ -29,6 +31,19 @@ func main() {
 	srv, err := web.New(client, marzban.PlansFromEnv(), secure)
 	if err != nil {
 		log.Fatalf("init web: %v", err)
+	}
+
+	// 账号体系(WI-2): UC_PG_DSN 未配置时为 nil, 保持 token 粘贴登录。
+	acct, err := accounts.NewFromEnv(context.Background())
+	if err != nil {
+		log.Fatalf("init accounts: %v", err)
+	}
+	if acct != nil {
+		defer acct.Close(context.Background())
+		srv.AttachAccounts(acct)
+		log.Println("accounts: authkit 已挂载(PostgreSQL)")
+	} else {
+		log.Println("accounts: 未启用(UC_PG_DSN 空), 走 token 粘贴模式")
 	}
 
 	addr := os.Getenv("USERCENTER_ADDR")
