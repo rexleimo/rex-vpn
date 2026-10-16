@@ -16,6 +16,14 @@ type AccountBackend interface {
 	LinkToken(ctx context.Context, accountID string) (string, bool, error)
 	SetLink(ctx context.Context, accountID, token string) error
 	AccountEmail(ctx context.Context, accountID string) (string, error)
+	IsAdmin(ctx context.Context, userID string) bool
+	ListAccounts(ctx context.Context, search string) ([]accounts.AdminUser, error)
+	CreatePasswordUser(ctx context.Context, email, username, password string) (string, error)
+	BanAccount(ctx context.Context, userID, reason string) error
+	UnbanAccount(ctx context.Context, userID string) error
+	DeleteAccount(ctx context.Context, userID string) error
+	ResetPassword(ctx context.Context, userID, password string) error
+	GrantAdmin(ctx context.Context, email string) error
 }
 
 // AttachAccounts 注入账号体系服务(nil 或不注入 = 保持 token 粘贴模式)。在 Router() 之前调用。

@@ -48,8 +48,10 @@ func main() {
 			id, err := acct.EnsurePasswordUser(context.Background(), email, pw)
 			if err != nil {
 				log.Printf("seed admin %s: %v", email, err)
+			} else if err := acct.GrantAdmin(context.Background(), email); err != nil {
+				log.Printf("grant admin %s: %v", email, err)
 			} else {
-				log.Printf("seed admin ready: %s (%s)", email, id)
+				log.Printf("seed admin ready: %s (%s, role=admin)", email, id)
 			}
 		}
 		srv.AttachAccounts(acct)

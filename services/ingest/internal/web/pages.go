@@ -424,6 +424,9 @@ function wmOpenEdit(name){
 
 {{define "pageUsers"}}
 <h1 class="wm-display fs-2 mb-4">用户(只读)</h1>
+<div class="alert alert-info py-2 small d-flex justify-content-between align-items-center flex-wrap gap-2">
+  <span>此页为 Marzban 订阅数据(只读)。账号体系建号/禁用/重置密码请前往<strong>用户中心 → 用户管理</strong>(需 admin 登录)。</span>
+</div>
 {{if .ErrText}}<div class="alert alert-warning py-2 small">{{.ErrText}}</div>{{end}}
 <div class="card p-4">
   <form class="row g-2 mb-3" method="GET" action="/admin/users">

@@ -14,8 +14,9 @@ import (
 
 // Service 持有 authkit 客户端与 PG 连接池; nil 表示账号体系禁用。
 type Service struct {
-	Client *authkit.Client
-	pool   *pgxpool.Pool
+	Client    *authkit.Client
+	pool      *pgxpool.Pool
+	AdminRole iam.Role // root 管理角色(见 admin.go), 在 NewFromEnv 声明
 }
 
 // NewFromEnv 按环境变量装配。必需: UC_PG_DSN / UC_TENANT_ID;
@@ -41,6 +42,9 @@ func NewFromEnv(ctx context.Context) (*Service, error) {
 		pool.Close()
 		return nil, fmt.Errorf("pg ping: %w", err)
 	}
+	// 权限模型: root 上的 admin 角色(用户目录全权), 供运营页与种子管理员。
+	roles := authkit.NewRoles()
+	adminRole := roles.Root.Role(AdminRoleName, roles.Root.Users.All())
 	auth, err := authkit.New(ctx, authkit.Config{
 		DefaultTenantID: tenantID,
 		Database:        authkit.DatabaseConfig{Schema: "authkit"},
@@ -59,7 +63,11 @@ func NewFromEnv(ctx context.Context) (*Service, error) {
 			NativeUserMode:      iam.RegistrationModeClosed,
 			AllowMissingSenders: true,
 		},
-		Roles: authkit.NewRoles(),
+		// v1 无邮件/TOTP 注册 UX: 2FA 整体关。注意 admin 角色的 Users.All() 授权
+		// 会派生 RequiresMFA(见 internal/rbac/schema.go), 不关则管理员登录被 enrollment 死锁。
+		// 后续强化: 接邮件通道后改 optional, 管理员单独 required+TOTP。
+		TwoFactor: authkit.TwoFactorConfig{Mode: iam.TwoFactorDisabled},
+		Roles:     roles,
 	}, authkit.Deps{Postgres: pool})
 	if err != nil {
 		pool.Close()
@@ -69,7 +77,7 @@ func NewFromEnv(ctx context.Context) (*Service, error) {
 		pool.Close()
 		return nil, fmt.Errorf("authkit start: %w", err)
 	}
-	return &Service{Client: auth, pool: pool}, nil
+	return &Service{Client: auth, pool: pool, AdminRole: adminRole}, nil
 }
 
 // Close 停后台作业并关连接池。

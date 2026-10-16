@@ -86,3 +86,72 @@ func TestPGCreateLoginAndLink(t *testing.T) {
 		t.Fatalf("AccountEmail = (%q,%v)", em, err)
 	}
 }
+
+// TestPGAdminSurface: 授权→列表→禁用→恢复→重置密码→删除 全链路(真 authkit)。
+func TestPGAdminSurface(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	email := fmt.Sprintf("pgadmin-%d@example.test", time.Now().UnixNano())
+	pw := "Adm1n-Test-Pass!"
+
+	id, err := svc.CreatePasswordUser(ctx, email, "", pw)
+	if err != nil {
+		t.Fatalf("CreatePasswordUser: %v", err)
+	}
+	if svc.IsAdmin(ctx, id) {
+		t.Fatal("fresh user must not be admin")
+	}
+	if err := svc.GrantAdmin(ctx, email); err != nil {
+		t.Fatalf("GrantAdmin: %v", err)
+	}
+	if !svc.IsAdmin(ctx, id) {
+		t.Fatal("IsAdmin after GrantAdmin = false")
+	}
+
+	find := func(want string, pred func(AdminUser) bool) AdminUser {
+		t.Helper()
+		list, err := svc.ListAccounts(ctx, email)
+		if err != nil {
+			t.Fatalf("ListAccounts: %v", err)
+		}
+		for _, u := range list {
+			if u.ID == id {
+				if !pred(u) {
+					t.Fatalf("%s: entry %+v", want, u)
+				}
+				return u
+			}
+		}
+		t.Fatalf("%s: user %s not in list", want, id)
+		return AdminUser{}
+	}
+	find("admin flag", func(u AdminUser) bool { return u.Admin && u.Status == "active" })
+
+	if err := svc.BanAccount(ctx, id, "e2e"); err != nil {
+		t.Fatalf("BanAccount: %v", err)
+	}
+	find("banned", func(u AdminUser) bool { return u.Status == "banned" })
+	if _, err := svc.Login(ctx, email, pw, "127.0.0.1"); err == nil {
+		t.Fatal("banned account login must fail")
+	}
+	if err := svc.UnbanAccount(ctx, id); err != nil {
+		t.Fatalf("UnbanAccount: %v", err)
+	}
+	find("unbanned", func(u AdminUser) bool { return u.Status == "active" })
+
+	newPw := "Rotated-9Pass!"
+	if err := svc.ResetPassword(ctx, id, newPw); err != nil {
+		t.Fatalf("ResetPassword: %v", err)
+	}
+	if _, err := svc.Login(ctx, email, pw, "127.0.0.1"); err == nil {
+		t.Fatal("old password must stop working")
+	}
+	if _, err := svc.Login(ctx, email, newPw, "127.0.0.1"); err != nil {
+		t.Fatalf("login with reset password: %v", err)
+	}
+
+	if err := svc.DeleteAccount(ctx, id); err != nil {
+		t.Fatalf("DeleteAccount: %v", err)
+	}
+	find("deleted", func(u AdminUser) bool { return u.Status == "deleted" })
+}

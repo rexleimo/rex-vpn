@@ -27,6 +27,7 @@ const userLayout = `
         <a class="nav-link{{if eq .Active "dashboard"}} active fw-semibold{{end}}" href="/dashboard">概览</a>
         <a class="nav-link{{if eq .Active "subscription"}} active fw-semibold{{end}}" href="/subscription">订阅</a>
         <a class="nav-link{{if eq .Active "purchase"}} active fw-semibold{{end}}" href="/purchase">购买</a>
+        {{if .IsAdmin}}<a class="nav-link{{if eq .Active "admin"}} active fw-semibold{{end}}" href="/admin/users">用户管理</a>{{end}}
         <form method="POST" action="/logout" class="d-inline ms-md-2">
           <button type="submit" class="btn btn-outline-secondary btn-sm">退出</button>
         </form>
@@ -38,6 +39,7 @@ const userLayout = `
 <main class="container py-4 py-md-5" style="max-width:1080px">
 {{if eq .Content "login"}}{{template "login" .PageData}}{{end}}
 {{if eq .Content "bind"}}{{template "bind" .PageData}}{{end}}
+{{if eq .Content "adminUsers"}}{{template "adminUsers" .PageData}}{{end}}
 {{if eq .Content "pageDashboard"}}{{template "pageDashboard" .PageData}}{{end}}
 {{if eq .Content "pageSubscription"}}{{template "pageSubscription" .PageData}}{{end}}
 {{if eq .Content "pagePurchase"}}{{template "pagePurchase" .PageData}}{{end}}
@@ -98,6 +100,81 @@ const userLayout = `
       <input class="form-control form-control-lg" type="text" name="token" placeholder="订阅 token" autofocus required>
       <button class="btn btn-primary btn-lg" type="submit">绑定并进入</button>
     </form>
+  </div>
+</div>
+{{end}}
+
+{{define "adminUsers"}}
+<div class="d-flex justify-content-between align-items-end mb-4">
+  <div>
+    <h1 class="wm-display fs-2 mb-1">用户管理</h1>
+    <div class="wm-muted">账号体系(authkit): 运营建号、禁用、重置密码</div>
+  </div>
+  <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#wm-add-user">+ 添加用户</button>
+</div>
+<form method="GET" action="/admin/users" class="input-group mb-3" style="max-width:360px">
+  <input class="form-control" type="search" name="q" placeholder="搜邮箱/用户名" value="{{.Search}}">
+  <button class="btn btn-outline-secondary" type="submit">搜索</button>
+</form>
+<div class="card">
+  <table class="table table-hover align-middle mb-0">
+    <thead><tr><th>邮箱</th><th>用户名</th><th>状态</th><th>角色</th><th>最近登录</th><th class="text-end">操作</th></tr></thead>
+    <tbody>
+    {{range .Users}}
+      <tr>
+        <td>{{.Email}}</td>
+        <td class="wm-muted">{{.Username}}</td>
+        <td>{{if eq .Status "active"}}<span class="badge text-bg-success">正常</span>{{else if eq .Status "banned"}}<span class="badge text-bg-warning">已禁用</span>{{else}}<span class="badge text-bg-secondary">已删除</span>{{end}}</td>
+        <td>{{if .Admin}}<span class="badge text-bg-dark">管理员</span>{{end}}</td>
+        <td class="wm-muted small">{{.LastLogin}}</td>
+        <td class="text-end">
+          {{if ne .ID $.SelfID}}
+          <form method="POST" action="/admin/users/resetpw" data-wm-act="/admin/users/resetpw" data-wm-flash="密码已重置 {{.Email}}" class="d-inline-flex gap-1">
+            <input type="hidden" name="id" value="{{.ID}}">
+            <input class="form-control form-control-sm" type="text" name="password" placeholder="新密码" style="width:7.5rem" required minlength="8">
+            <button class="btn btn-outline-secondary btn-sm" type="submit">重置密码</button>
+          </form>
+          {{if not .Admin}}<form method="POST" action="/admin/users/grant" data-wm-act="/admin/users/grant" data-wm-flash="已授予管理员" class="d-inline">
+            <input type="hidden" name="email" value="{{.Email}}">
+            <button class="btn btn-outline-primary btn-sm" type="submit">授管理</button>
+          </form>{{end}}
+          {{if eq .Status "active"}}<form method="POST" action="/admin/users/ban" class="d-inline" data-wm-danger data-wm-title="确认禁用" data-wm-ok="禁用" data-wm-flash="已禁用 {{.Email}}"
+            onsubmit="return wmConfirmAct(event, this, '禁用 {{.Email}} 后该账号立即无法登录与使用订阅。确定?')">
+            <input type="hidden" name="id" value="{{.ID}}"><button class="btn btn-outline-warning btn-sm" type="submit">禁用</button></form>
+          {{else if eq .Status "banned"}}<form method="POST" action="/admin/users/unban" data-wm-act="/admin/users/unban" data-wm-flash="已恢复 {{.Email}}" class="d-inline">
+            <input type="hidden" name="id" value="{{.ID}}"><button class="btn btn-outline-success btn-sm" type="submit">恢复</button></form>{{end}}
+          {{if ne .Status "deleted"}}<form method="POST" action="/admin/users/delete" class="d-inline" data-wm-danger data-wm-title="确认删除" data-wm-ok="删除" data-wm-flash="已删除 {{.Email}}"
+            onsubmit="return wmConfirmAct(event, this, '删除 {{.Email}} 为软删(30 天内可恢复), 订阅绑定保留。确定?')">
+            <input type="hidden" name="id" value="{{.ID}}"><button class="btn btn-outline-danger btn-sm" type="submit">删除</button></form>{{end}}
+          {{else}}<span class="wm-muted small">当前账号</span>{{end}}
+        </td>
+      </tr>
+    {{else}}
+      <tr><td colspan="6" class="text-center wm-muted py-4">暂无账号 —— 点右上「+ 添加用户」建第一个</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+
+<div class="modal fade" id="wm-add-user" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <form method="POST" action="/admin/users/create" data-wm-act="/admin/users/create" data-wm-flash="用户已添加">
+      <div class="modal-header"><h5 class="modal-title">添加用户</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <div class="mb-3"><label class="form-label">邮箱</label>
+          <input class="form-control" type="email" name="email" placeholder="user@example.com" required autofocus></div>
+        <div><label class="form-label">初始密码(≥ 8 位)</label>
+          <input class="form-control" type="text" name="password" minlength="8" required></div>
+        <div class="wm-muted small mt-2">用户名自动从邮箱派生; 用户登录后可在绑定页关联订阅 token。</div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+        <button type="submit" class="btn btn-primary">创建</button>
+      </div>
+      </form>
+    </div>
   </div>
 </div>
 {{end}}

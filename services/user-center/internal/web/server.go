@@ -92,6 +92,15 @@ func (s *Server) Router() *gin.Engine {
 		bind := e.Group("", s.bindOnly())
 		bind.GET("/bind", s.bindPage)
 		bind.POST("/bind", s.bindPost)
+		// 运营用户管理(WI-5): admin 角色门槛。
+		adm := e.Group("/admin", s.adminOnly())
+		adm.GET("/users", s.adminUsersPage)
+		adm.POST("/users/create", s.adminUserCreate)
+		adm.POST("/users/ban", s.adminUserBan)
+		adm.POST("/users/unban", s.adminUserUnban)
+		adm.POST("/users/delete", s.adminUserDelete)
+		adm.POST("/users/resetpw", s.adminUserResetPw)
+		adm.POST("/users/grant", s.adminUserGrant)
 	}
 	auth.GET("/subscription", s.subscription)
 	auth.POST("/subscription/token", s.retoken)
@@ -216,6 +225,13 @@ func (s *Server) logout(c *gin.Context) {
 
 func (s *Server) page(c *gin.Context, p Page) {
 	p.CSS = webui.ThemeCSS()
+	if s.accounts != nil && !p.IsAdmin {
+		if v, ok := s.sessionValue(c.Request); ok {
+			if id, isAcct := acctID(v); isAcct {
+				p.IsAdmin = s.accounts.IsAdmin(c.Request.Context(), id)
+			}
+		}
+	}
 	webui.WritePage(c.Writer, s.Template, "layout", p)
 }
 
@@ -395,6 +411,7 @@ type Page struct {
 	CSS           template.CSS // 主题层为受信 CSS, 避免 html/template 在 <style> 上下文做二次净化(见 ZgotmplZ)
 	Content       string
 	PageData      any
+	IsAdmin       bool // 导航里的运营入口(账号体系 admin 才渲染)
 }
 
 type DashboardData struct {

@@ -18,6 +18,40 @@ type fakeAccounts struct {
 	links    map[string]string // accountID -> marzban token
 	setLink  []string          // 记录 SetLink 调用
 	email    string
+
+	// WI-5 管理面
+	admins map[string]bool
+	listed []accounts.AdminUser
+	ops    []string // 记录 create/ban/unban/delete/reset/grant
+}
+
+func (f *fakeAccounts) IsAdmin(ctx context.Context, userID string) bool { return f.admins[userID] }
+func (f *fakeAccounts) ListAccounts(ctx context.Context, search string) ([]accounts.AdminUser, error) {
+	return f.listed, nil
+}
+func (f *fakeAccounts) CreatePasswordUser(ctx context.Context, email, username, password string) (string, error) {
+	f.ops = append(f.ops, "create:"+email)
+	return "u-new", nil
+}
+func (f *fakeAccounts) BanAccount(ctx context.Context, id, reason string) error {
+	f.ops = append(f.ops, "ban:"+id)
+	return nil
+}
+func (f *fakeAccounts) UnbanAccount(ctx context.Context, id string) error {
+	f.ops = append(f.ops, "unban:"+id)
+	return nil
+}
+func (f *fakeAccounts) DeleteAccount(ctx context.Context, id string) error {
+	f.ops = append(f.ops, "delete:"+id)
+	return nil
+}
+func (f *fakeAccounts) ResetPassword(ctx context.Context, id, password string) error {
+	f.ops = append(f.ops, "resetpw:"+id)
+	return nil
+}
+func (f *fakeAccounts) GrantAdmin(ctx context.Context, email string) error {
+	f.ops = append(f.ops, "grant:"+email)
+	return nil
 }
 
 func (f *fakeAccounts) Login(ctx context.Context, identifier, password, ip string) (accounts.Auth, error) {
@@ -43,9 +77,10 @@ func newAcctServer(t *testing.T) (*Server, *fakeAccounts) {
 	t.Helper()
 	s := newServer(t)
 	f := &fakeAccounts{
-		auth:  accounts.Auth{UserID: "u-123", Email: "rex@dev.local", Username: "rex"},
-		links: map[string]string{},
-		email: "rex@dev.local",
+		auth:   accounts.Auth{UserID: "u-123", Email: "rex@dev.local", Username: "rex"},
+		links:  map[string]string{},
+		email:  "rex@dev.local",
+		admins: map[string]bool{"u-123": true},
 	}
 	s.accounts = f
 	return s, f
@@ -173,5 +208,103 @@ func TestAcctRetokenKeepsSession(t *testing.T) {
 	}
 	if len(f.setLink) != 1 {
 		t.Fatalf("SetLink calls = %v", f.setLink)
+	}
+}
+
+// ---- WI-5: 用户管理页 ----
+
+func postJSON(t *testing.T, mux http.Handler, target, body string, cookie *http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	req := jsonReq("POST", target, body)
+	if cookie != nil {
+		req.AddCookie(cookie)
+	}
+	mux.ServeHTTP(rec, req)
+	return rec
+}
+
+func TestAdminUsersGateAndActions(t *testing.T) {
+	s, f := newAcctServer(t)
+	mux := s.Router()
+	cookie := acctCookie(t, mux)
+
+	// 非 admin → 踢回 dashboard
+	f.admins["u-123"] = false
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/admin/users", nil)
+	req.AddCookie(cookie)
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/dashboard" {
+		t.Fatalf("non-admin /admin/users = %d %q", rec.Code, rec.Header().Get("Location"))
+	}
+	f.admins["u-123"] = true
+
+	// admin → 200 + 行渲染 + 导航入口
+	f.listed = []accounts.AdminUser{
+		{ID: "u-123", Email: "rex@dev.local", Status: "active", Admin: true},
+		{ID: "u-9", Email: "new@x.test", Username: "newuser", Status: "banned"},
+	}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/admin/users", nil)
+	req.AddCookie(cookie)
+	mux.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK || !strings.Contains(body, "rex@dev.local") || !strings.Contains(body, "new@x.test") {
+		t.Fatalf("admin page = %d, render missing users", rec.Code)
+	}
+	if !strings.Contains(body, "已禁用") {
+		t.Fatal("banned badge missing")
+	}
+
+	// 添加用户
+	if r := postJSON(t, mux, "/admin/users/create", "email=a@x.test&password=12345678", cookie); r.Code != http.StatusOK {
+		t.Fatalf("create = %d %s", r.Code, r.Body.String())
+	}
+	// 密码过短拒绝
+	if r := postJSON(t, mux, "/admin/users/create", "email=a@x.test&password=1", cookie); r.Code != http.StatusBadRequest {
+		t.Fatalf("short-pw create = %d, want 400", r.Code)
+	}
+
+	// 自操作保护
+	r := postJSON(t, mux, "/admin/users/ban", "id=u-123", cookie)
+	if r.Code != http.StatusBadRequest || !strings.Contains(r.Body.String(), "不能对自己") {
+		t.Fatalf("self-ban = %d %s", r.Code, r.Body.String())
+	}
+	// 正常禁用
+	if r := postJSON(t, mux, "/admin/users/ban", "id=u-9", cookie); r.Code != http.StatusOK {
+		t.Fatalf("ban = %d %s", r.Code, r.Body.String())
+	}
+	want := map[string]bool{"ban:u-9": true}
+	for _, op := range f.ops {
+		delete(want, op)
+	}
+	if len(want) != 0 {
+		t.Fatalf("ops = %v, want ban:u-9", f.ops)
+	}
+}
+
+// 导航: admin 见「用户管理」, 普通用户不见。
+func TestNavAdminEntry(t *testing.T) {
+	s, f := newAcctServer(t)
+	f.links["u-123"] = "test-token"
+	mux := s.Router()
+	cookie := acctCookie(t, mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/dashboard", nil)
+	req.AddCookie(cookie)
+	mux.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), "/admin/users") {
+		t.Fatal("admin nav entry missing")
+	}
+
+	f.admins["u-123"] = false
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("GET", "/dashboard", nil)
+	req.AddCookie(cookie)
+	mux.ServeHTTP(rec, req)
+	if strings.Contains(rec.Body.String(), "/admin/users") {
+		t.Fatal("non-admin must not see admin nav")
 	}
 }

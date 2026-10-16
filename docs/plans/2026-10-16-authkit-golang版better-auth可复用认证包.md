@@ -1,6 +1,6 @@
 # authkit 集成 — open-rails/authkit + PostgreSQL
 
-日期: 2026-10-16 | 状态: 执行中(WI-0..4 完成✅, WI-5..6 待做) | 分类: planned
+日期: 2026-10-16 | 状态: 执行中(WI-0..5 完成✅, WI-6 待做) | 分类: planned
 取代: 本文档取代同日前稿「authkit-golang版better-auth可复用认证包」（自研方案作废，用户拍板改用开源 open-rails/authkit 并把数据库切到 PostgreSQL）。
 
 ## 决策记录
@@ -44,7 +44,7 @@ WI-1 ✅ deploy/.env(gitignored; TENANT=c85ef835-de62-46f2-bc41-f905549a0edf) + 
 WI-2 ✅ internal/accounts + authkitgin.Mount; 冒烟: authkit schema 建表 / JWKS 响应 / River 启动; 未配 UC_PG_DSN 自动回退旧 token 模式, 存量测试零回归(authkit v1.31.0 已 pin)
 WI-3 ✅ 登录页双模式: 账号=邮箱+密码(data-wm-act 链路), legacy 不变; 进程内代理 authkit /password/login; 契约测试(fake backend)+浏览器 E2E 绿
 WI-4 ✅ 绑定流: session=acct:<id>, PG 映射表 uc_account_links, 未绑→/bind 页(门槛 bindOnly 拆重定向环), retoken 账号模式写映射不动会话; PG 集成测试(真 authkit)+E2E 截图 .shots/wi3-bind-page.png
-WI-5 admin「+添加用户」: ingest 调 authkit users API 建号(一次性密码/邀请) + 关闭自助注册策略 ← WI-2
+WI-5 ✅ 运营用户管理页(user-center /admin/users): admin 角色门槛 + 建号/禁用/恢复/删除/重置密码/授管理; 自操作保护; ingest「用户(只读)」页加指引横幅。坑=admin 角色 Users.All() 派生 RequiresMFA → v1 显式 TwoFactor.Disabled 解除登录死锁(后续接邮件后改 optional/required)
 WI-6 验证与文档: 契约测试 + 浏览器 E2E(注册禁用/管理员建号/登录/会话) + deploy 文档(PG 运维)  ← WI-3..5
 WI-7 (可选,另批) ingest 业务库 sqlite→PG 迁移                                            ← 独立
 ```
