@@ -55,9 +55,9 @@ func (c *httpClient) CreateUser(ctx context.Context, spec UserSpec) (Created, er
 		return Created{}, fmt.Errorf("marzban: create: empty username")
 	}
 	body := map[string]any{
-		"username": spec.Username,
-		"status":   "active",
-		"expire":   spec.Expire,
+		"username":   spec.Username,
+		"status":     "active",
+		"expire":     spec.Expire,
 		"data_limit": spec.DataLimit,
 	}
 	if ids := inboundIDs(); len(ids) > 0 {

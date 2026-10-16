@@ -88,3 +88,6 @@ func (s *Service) Close(ctx context.Context) {
 	_ = s.Client.Close(ctx)
 	s.pool.Close()
 }
+
+// Pool 暴露底层 pgx 池供同进程其他域(如 billing)复用同一连接池。
+func (s *Service) Pool() *pgxpool.Pool { return s.pool }

@@ -1,5 +1,13 @@
 package web
 
+import (
+	"fmt"
+	"html/template"
+	"time"
+
+	"vpnmaster/user-center/internal/marzban"
+)
+
 // userLayout 是 user-center 的 layout + 页 define。
 // 视觉地基 = vendored Bootstrap 5 + Apple 风 theme.css(ADR-0002);
 // 轮询契约(data-f / inv-body 选择器)与 wc-6.x 保持一致。
@@ -26,7 +34,7 @@ const userLayout = `
       <div class="navbar-nav ms-auto align-items-md-center gap-md-2">
         <a class="nav-link{{if eq .Active "dashboard"}} active fw-semibold{{end}}" href="/dashboard">概览</a>
         <a class="nav-link{{if eq .Active "subscription"}} active fw-semibold{{end}}" href="/subscription">订阅</a>
-        <a class="nav-link{{if eq .Active "purchase"}} active fw-semibold{{end}}" href="/purchase">购买</a>
+        {{if .HasBilling}}<a class="nav-link{{if eq .Active "purchase"}} active fw-semibold{{end}}" href="/billing">购买</a>{{else}}<a class="nav-link{{if eq .Active "purchase"}} active fw-semibold{{end}}" href="/purchase">购买</a>{{end}}
         {{if .IsAdmin}}<a class="nav-link{{if eq .Active "admin"}} active fw-semibold{{end}}" href="/admin/users">用户管理</a>{{end}}
         <form method="POST" action="/logout" class="d-inline ms-md-2">
           <button type="submit" class="btn btn-outline-secondary btn-sm">退出</button>
@@ -40,6 +48,7 @@ const userLayout = `
 {{if eq .Content "login"}}{{template "login" .PageData}}{{end}}
 {{if eq .Content "bind"}}{{template "bind" .PageData}}{{end}}
 {{if eq .Content "adminUsers"}}{{template "adminUsers" .PageData}}{{end}}
+{{if eq .Content "pageBilling"}}{{template "pageBilling" .PageData}}{{end}}
 {{if eq .Content "pageDashboard"}}{{template "pageDashboard" .PageData}}{{end}}
 {{if eq .Content "pageSubscription"}}{{template "pageSubscription" .PageData}}{{end}}
 {{if eq .Content "pagePurchase"}}{{template "pagePurchase" .PageData}}{{end}}
@@ -316,4 +325,127 @@ const userLayout = `
 })();
 </script>
 {{end}}
+{{define "pageBilling"}}
+<h1 class="wm-display fs-2 mb-1">订阅</h1>
+<p class="wm-muted small mb-4">付款成功后系统自动生成你的订阅地址(Clash 链接), 无需任何 token。</p>
+{{if .Err}}<div class="alert alert-danger py-2 small">{{.Err}}</div>{{end}}
+{{if .Notice}}<div class="alert alert-info py-2 small">{{.Notice}}</div>{{end}}
+{{with .Sub}}
+<div class="card p-4 mb-4">
+  <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+    <div>
+      <span class="fw-semibold">{{.PlanName}}</span>
+      <span class="badge text-bg-{{if eq .Status "生效中"}}success{{else}}secondary{{end}} ms-2">{{.Status}}</span>
+      {{if not (eq .PeriodEnd "0001-01-01")}}<div class="wm-muted small mt-1">本期至 {{.PeriodEnd}}</div>{{end}}
+    </div>
+    <a class="btn btn-outline-secondary btn-sm" href="/billing/manage">管理订阅</a>
+  </div>
+</div>
+{{end}}
+<div class="row g-3">
+  {{range .Plans}}
+  <div class="col-12 col-md-4">
+    <div class="card p-4 h-100 d-flex flex-column">
+      <h2 class="h5 mb-1">{{.Name}}</h2>
+      <div class="wm-muted small mb-2">{{.SpecStr}}</div>
+      <div class="h4 mb-3">{{.PriceStr}}</div>
+      <form method="POST" action="/billing/checkout" class="mt-auto d-grid">
+        <input type="hidden" name="plan" value="{{.Name}}">
+        <button class="btn btn-primary" type="submit">{{if $.Sub}}续费/重开{{else}}立即订阅{{end}}</button>
+      </form>
+    </div>
+  </div>
+  {{end}}
+</div>
+{{if .Stub}}<div class="wm-muted small mt-3">当前为本地 stub 收银台(WAFFO_STUB=1); 生产接入 Waffo 后同一链路走真签名回调。</div>{{end}}
+{{end}}
 `
+
+// ---- 视图模型(自 server.go 拆入, 500 行约束) ----
+
+type Page struct {
+	Title, Active string
+	CSS           template.CSS // 主题层为受信 CSS, 避免 html/template 在 <style> 上下文做二次净化(见 ZgotmplZ)
+	Content       string
+	PageData      any
+	IsAdmin       bool // 导航里的运营入口(账号体系 admin 才渲染)
+	HasBilling    bool // 导航购买入口指向 /billing(订阅启用时)
+}
+
+type DashboardData struct {
+	Username  string
+	Status    string
+	Online    bool
+	UsedStr   string
+	LimitStr  string
+	QuotaPct  int
+	ExpireStr string
+}
+
+type Guide struct {
+	Title string
+	Desc  string
+}
+
+type SubData struct {
+	SubURL  string
+	Guides  []Guide
+	Changed bool
+	Err     string
+}
+
+type PlanView struct {
+	Name  string
+	Price int64
+	GBStr string
+	Days  int
+}
+
+type PurchaseData struct {
+	Plans       []PlanView
+	Invoices    []marzban.Invoice
+	JustOrdered bool
+	Err         string
+}
+
+type InvoiceView struct {
+	ID        int64
+	PlanName  string
+	Amount    int64
+	Status    string
+	CreatedAt string
+}
+
+func humanBytes(b int64) string {
+	if b <= 0 {
+		return "0 B"
+	}
+	const unit = 1024
+	i := 0
+	f := float64(b)
+	for f >= unit && i < 5 {
+		f /= unit
+		i++
+	}
+	if i == 0 {
+		return fmt.Sprintf("%d B", b)
+	}
+	return fmt.Sprintf("%.1f %ciB", f, "KMGTPE"[i-1])
+}
+
+// fmtExpire Marzban 的 expire 实际是 unix 时间戳(marzban.go 旧注释"天"为误);
+// 兼容小数值按"天"处理, 时间戳按日期+剩余天数渲染。
+func fmtExpire(v int) string {
+	if v <= 0 {
+		return "不限时"
+	}
+	if v < 100_000_000 {
+		return fmt.Sprintf("%d 天", v)
+	}
+	t := time.Unix(int64(v), 0)
+	left := int(time.Until(t).Hours() / 24)
+	if left < 0 {
+		left = 0
+	}
+	return fmt.Sprintf("%s (余 %d 天)", t.Format("2006-01-02"), left)
+}

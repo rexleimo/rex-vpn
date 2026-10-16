@@ -38,6 +38,7 @@ require (
 	github.com/quic-go/qpack v0.6.0 // indirect
 	github.com/quic-go/quic-go v0.59.1 // indirect
 	github.com/redis/go-redis/v9 v9.22.0 // indirect
+	github.com/rexleimo/waffo-kit v0.0.0-00010101000000-000000000000 // indirect
 	github.com/riverqueue/river v0.47.0 // indirect
 	github.com/riverqueue/river/riverdriver v0.47.0 // indirect
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.47.0 // indirect
@@ -48,6 +49,7 @@ require (
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
+	github.com/waffo-com/waffo-pancake-sdk-go v0.17.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
 	github.com/zitadel/oidc/v3 v3.51.3 // indirect
 	github.com/zitadel/schema v1.3.2 // indirect
@@ -93,3 +95,5 @@ require (
 replace vpnmaster/webui => ../webui
 
 replace vpnmaster/webkit => ../webkit
+
+replace github.com/rexleimo/waffo-kit => ../../packages/waffo-kit

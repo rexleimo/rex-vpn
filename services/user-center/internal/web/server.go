@@ -18,6 +18,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	qr "github.com/skip2/go-qrcode"
+	"vpnmaster/user-center/internal/billing"
 	"vpnmaster/user-center/internal/marzban"
 	"vpnmaster/webkit"
 	"vpnmaster/webui"
@@ -37,7 +38,8 @@ type Server struct {
 
 	session  *webkit.Session
 	rl       *webkit.RateLimiter
-	accounts AccountBackend // nil = 账号体系未启用(WI-2 渐进集成)
+	accounts AccountBackend   // nil = 账号体系未启用(WI-2 渐进集成)
+	billing  *billing.Service // nil = 订阅未启用(旧 bind/purchase 路径)
 
 	mu    sync.Mutex
 	cache map[string]cacheEntry // token -> 最近一次解析(30s), 防 5s 轮询打爆 Marzban
@@ -74,6 +76,7 @@ func (s *Server) Router() *gin.Engine {
 	e := gin.New()
 	e.Use(gin.Recovery(), webkit.SecurityHeaders(csp))
 	s.mountAccounts(e) // authkit 路由(未接账号体系时 no-op)
+	s.mountBilling(e)  // /billing + /webhooks/waffo(未启用订阅时 no-op)
 
 	e.GET("/", s.root)
 	e.GET("/login", s.loginPage)
@@ -143,8 +146,12 @@ func (s *Server) userFor(ctx context.Context, r *http.Request) (marzban.User, bo
 func (s *Server) auth() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if id, unbound := s.accountUnbound(c); unbound {
-			_ = id // 登录已成但未绑订阅 → 绑定页
-			c.Redirect(http.StatusSeeOther, "/bind")
+			_ = id // 登录已成但无订阅供给: 订阅启用→去购买页; 否则回旧 bind 迁移通道
+			dest := "/bind"
+			if s.billing != nil {
+				dest = "/billing"
+			}
+			c.Redirect(http.StatusSeeOther, dest)
 			c.Abort()
 			return
 		}
@@ -225,6 +232,7 @@ func (s *Server) logout(c *gin.Context) {
 
 func (s *Server) page(c *gin.Context, p Page) {
 	p.CSS = webui.ThemeCSS()
+	p.HasBilling = s.billing != nil
 	if s.accounts != nil && !p.IsAdmin {
 		if v, ok := s.sessionValue(c.Request); ok {
 			if id, isAcct := acctID(v); isAcct {
@@ -402,92 +410,4 @@ func (s *Server) qrPNG(c *gin.Context) {
 
 func qrcodePNG(content string, size int) ([]byte, error) {
 	return qr.Encode(content, qr.Medium, size)
-}
-
-// ---- 视图 ----
-
-type Page struct {
-	Title, Active string
-	CSS           template.CSS // 主题层为受信 CSS, 避免 html/template 在 <style> 上下文做二次净化(见 ZgotmplZ)
-	Content       string
-	PageData      any
-	IsAdmin       bool // 导航里的运营入口(账号体系 admin 才渲染)
-}
-
-type DashboardData struct {
-	Username  string
-	Status    string
-	Online    bool
-	UsedStr   string
-	LimitStr  string
-	QuotaPct  int
-	ExpireStr string
-}
-
-type Guide struct {
-	Title string
-	Desc  string
-}
-
-type SubData struct {
-	SubURL  string
-	Guides  []Guide
-	Changed bool
-	Err     string
-}
-
-type PlanView struct {
-	Name  string
-	Price int64
-	GBStr string
-	Days  int
-}
-
-type PurchaseData struct {
-	Plans       []PlanView
-	Invoices    []marzban.Invoice
-	JustOrdered bool
-	Err         string
-}
-
-type InvoiceView struct {
-	ID        int64
-	PlanName  string
-	Amount    int64
-	Status    string
-	CreatedAt string
-}
-
-func humanBytes(b int64) string {
-	if b <= 0 {
-		return "0 B"
-	}
-	const unit = 1024
-	i := 0
-	f := float64(b)
-	for f >= unit && i < 5 {
-		f /= unit
-		i++
-	}
-	if i == 0 {
-		return fmt.Sprintf("%d B", b)
-	}
-	return fmt.Sprintf("%.1f %ciB", f, "KMGTPE"[i-1])
-}
-
-// fmtExpire Marzban 的 expire 实际是 unix 时间戳(marzban.go 旧注释"天"为误);
-// 兼容小数值按"天"处理, 时间戳按日期+剩余天数渲染。
-func fmtExpire(v int) string {
-	if v <= 0 {
-		return "不限时"
-	}
-	if v < 100_000_000 {
-		return fmt.Sprintf("%d 天", v)
-	}
-	t := time.Unix(int64(v), 0)
-	left := int(time.Until(t).Hours() / 24)
-	if left < 0 {
-		left = 0
-	}
-	return fmt.Sprintf("%s (余 %d 天)", t.Format("2006-01-02"), left)
 }

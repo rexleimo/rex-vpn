@@ -9,6 +9,9 @@ import (
 	"os"
 
 	"vpnmaster/user-center/internal/accounts"
+	"vpnmaster/user-center/internal/billing"
+
+	waffokit "github.com/rexleimo/waffo-kit"
 	"vpnmaster/user-center/internal/marzban"
 	"vpnmaster/user-center/internal/web"
 )
@@ -42,6 +45,22 @@ func main() {
 		defer acct.Close(context.Background())
 		if err := acct.EnsureLinksTable(context.Background()); err != nil {
 			log.Fatalf("init links table: %v", err)
+		}
+		// 订阅域(W-C): waffo-kit 收银台 + 事件投影; 未配置则留旧路径(bind/purchase)。
+		if kit, err := waffokit.NewFromEnv(); err == nil {
+			if err := billing.EnsureSchema(context.Background(), acct.Pool()); err != nil {
+				log.Fatalf("billing schema: %v", err)
+			}
+			store := billing.NewPGStore(acct.Pool())
+			bs := billing.New(kit, client, acct, store, marzban.PlansFromEnv(), os.Getenv("UC_PUBLIC_BASE"))
+			srv.AttachBilling(bs)
+			mode := "live(" + string(kit.Settings().Environment) + ")"
+			if kit.IsStub() {
+				mode = "stub"
+			}
+			log.Printf("billing: waffo-kit 已启用 mode=%s", mode)
+		} else if err != waffokit.ErrNotConfigured {
+			log.Printf("billing disabled: %v", err)
 		}
 		// 种子管理员(幂等): UC_ADMIN_EMAIL/UC_ADMIN_PASSWORD 配了才建。
 		if email, pw := os.Getenv("UC_ADMIN_EMAIL"), os.Getenv("UC_ADMIN_PASSWORD"); email != "" && pw != "" {
