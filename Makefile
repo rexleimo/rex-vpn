@@ -34,6 +34,7 @@ build-edge:     # xray-edge 镜像 (xray + watcher)
 edge:           # compose 里 xray-edge build 默认指向这里
 	docker build -t vpn-master/xray-edge:latest deploy/edge
 
+
 test-go:        # 本地跑 ingest 单测 (或进 dev 容器)
 	cd services/ingest && go test ./...
 

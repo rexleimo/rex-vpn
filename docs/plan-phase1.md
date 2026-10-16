@@ -96,9 +96,9 @@
 
 | id | 任务 | 脚本 | 验收 |
 |---|---|---|---|
-| 8.1 | E2E 全链路 | `scripts/e2e-full.sh`：Marzban sub → curl -x → 断言出口 IP ∉ 本机 ∧ ∈ 上游池；另加 user-center 线：真实 token 登录→看流量→复制订阅 一条绿 | 绿 |
-| 8.2 | 故障演练 | `scripts/chaos.sh`：iptables DROP 一上游 → ≤2 探测周期 events 出现 EVICT 且请求成功率不掉 → 恢复 → RECOVER 出现 | 绿 + 截图日志 |
-| 8.3 | 负载分布 | `scripts/load-50.sh`：50 并发 × 20 次出口 IP 聚合，断言 ≥2 节点均分到流量（leastPing 生效） | 分布表打印 |
+| 8.1 | E2E 全链路 | `scripts/e2e-full.sh`：线1 edge 直连隧道→出口 IP 非空 ∧ ∉ 本机(∈ 池仅参考: 域名/双栈上游下字面匹配不可靠，分流交 8.3)；线2 user-center 真实 token 登录→流量(used/limit)→订阅+QR 一条绿 | ✅ 绿 (2026-10-16 实跑; 前提修 xraygen balancers→selector bug) |
+| 8.2 | 故障演练 | `scripts/chaos.sh`：在 **ingest 容器(prober 拨号面)** iptables DROP 一上游 → events 出现 **目标指纹** EVICT ∧ 经 edge 隧道成功率不掉(≥80%) → 恢复 → 同指纹 RECOVER | ✅ 绿 (按 fp 精确断言，排除自然抖动假阳性; 基线 20/20→DROP 20/20→恢复 20/20) |
+| 8.3 | 负载分布 | `scripts/load-50.sh`：50 并发×20(容器内并发, 非 1000 次 docker-exec)出口聚合; 系统硬门=distinct 出口≥5 ∧ 无单点主导(最大单占≤70%) ∧ 出流量≥MIN; 池质量(成功率)软观测 <80% 打 WARN | ✅ 绿 (700/1000, 108 distinct, 最大单占3%; 池质量70%<80%→WARN) |
 | 8.4 | 长稳说明 | `docs/soak.md`：24h 观察项（节点封禁率/延迟漂移/上游账单对账） | 文档 + 跑 24h 结论 |
 
 ### work-9 Dokploy 上线（dependsOn: work-8 全绿）

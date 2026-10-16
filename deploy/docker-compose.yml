@@ -48,7 +48,7 @@ services:
   # build context = services/ (含共享模块 webui)
   ingest:
     build:
-      context: ../../services
+      context: ../services
       dockerfile: ingest/Dockerfile
     volumes:
       - ingest-data:/data
@@ -64,7 +64,7 @@ services:
   # ---------- user-center (终端用户自助门户, Go SSR 单容器, 见 plan-user-center.md) ----------
   user-center:
     build:
-      context: ../../services
+      context: ../services
       dockerfile: user-center/Dockerfile
     env_file: .env
     environment:

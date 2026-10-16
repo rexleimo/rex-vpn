@@ -1,0 +1,161 @@
+{
+  "api": {
+    "listen": "127.0.0.1:8080",
+    "tag": "api",
+    "services": [
+      "Handler",
+      "Stats",
+      "Routing"
+    ]
+  },
+  "log": {
+    "access": "",
+    "error": "",
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "tag": "in_edge_ws",
+      "listen": "0.0.0.0",
+      "port": 10086,
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "00000000-0000-4000-8000-000000000001",
+            "flow": ""
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {
+          "path": "/edge-ws"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "tag": "upstream_lb",
+      "selector": [
+        "up_aaaabbbb00001111aaaabbbb00001111",
+        "up_ccccdddd00001111ccccdddd00001111",
+        "up_eeeeffff00001111eeeeffff00001111"
+      ],
+      "balancingStrategy": "leastPing"
+    },
+    {
+      "tag": "up_aaaabbbb00001111aaaabbbb00001111",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "1.2.3.4",
+            "port": 443,
+            "users": [
+              {
+                "id": "uuid-a",
+                "encryption": "none",
+                "flow": ""
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "one.example.com",
+          "fingerprint": "chrome"
+        },
+        "wsSettings": {
+          "path": "/a"
+        }
+      }
+    },
+    {
+      "tag": "up_ccccdddd00001111ccccdddd00001111",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "5.6.7.8",
+            "port": 443,
+            "users": [
+              {
+                "id": "uuid-b",
+                "encryption": "none",
+                "flow": ""
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "two.example.com",
+          "fingerprint": "chrome"
+        },
+        "wsSettings": {
+          "path": "/b"
+        }
+      }
+    },
+    {
+      "tag": "up_eeeeffff00001111eeeeffff00001111",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "9.10.11.12",
+            "port": 8443,
+            "users": [
+              {
+                "id": "uuid-c",
+                "encryption": "none",
+                "flow": ""
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "three.example.com",
+          "fingerprint": "chrome"
+        },
+        "wsSettings": {
+          "path": "/c"
+        }
+      }
+    }
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {
+        "type": "field",
+        "domain": [
+          "regexp:.*"
+        ],
+        "outboundTag": "upstream_lb"
+      },
+      {
+        "type": "field",
+        "ip": [
+          "0.0.0.0/0"
+        ],
+        "outboundTag": "upstream_lb"
+      }
+    ]
+  },
+  "stats": {}
+}

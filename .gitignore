@@ -4,13 +4,16 @@ deploy/.env
 
 # 运行产物
 *.db
-out/
+/out/
 dist/
 node_modules/
 
 # 二进制
 *.exe
 /tmp/
+# air 热重载产物 (dev 镜像内/宿主机挂载可见)
+/services/ingest/tmp/
+/services/user-center/tmp/
 
 # 本地
 .DS_Store

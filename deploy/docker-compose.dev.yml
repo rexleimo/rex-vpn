@@ -15,28 +15,34 @@ services:
 
   ingest:
     build:
-      context: ../../services
+      context: ../services
       dockerfile: ingest/Dockerfile.dev   # air 热重载
     command: ["air"]
     volumes:
-      - ../../services/ingest:/src
-      - ../../services/webui:/webui   # 共享模块 (replace ../webui → /webui)
+      - ../services/ingest:/src
+      - ../services/webui:/webui   # 共享模块 (replace ../webui → /webui)
       - ingest-data:/data
       - xray-edge-config:/configs
     ports: ["9100:9100"]   # ingest API 调试
+    # chaos.sh 在 ingest 容器内对上游拨号目标做 iptables DROP (prober 在这里跑)
+    cap_add: ["NET_ADMIN"]
     environment:
       INGEST_API_ADDR: :9100
       XRAY_CONFIG: /configs/config.json
       DB_PATH: /data/ingest.db
+      # 开发态密集探测; chaos 需短间隔 (EvictFails=3 × 15s ≈ 45s 摘除; .env 的 1h 用于 soak)
+      PROBE_INTERVAL: "15s"
+      PROBE_RETRY_PERIOD: "15s"   # dev/chaos 快回池 (线上保持默认 2m)
+      EDGE_ACCESS_LOG: /tmp/xray-access.log   # load-50 按 outbound tag 聚合分流分布 (仅开发态)
 
   user-center:
     build:
-      context: ../../services
+      context: ../services
       dockerfile: user-center/Dockerfile.dev   # air 热重载
     command: ["air"]
     volumes:
-      - ../../services/user-center:/src
-      - ../../services/webui:/webui
+      - ../services/user-center:/src
+      - ../services/webui:/webui
     ports: ["9200:9200"]   # user-center 调试
     environment:
       USERCENTER_ADDR: :9200

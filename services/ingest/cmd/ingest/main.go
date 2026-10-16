@@ -57,7 +57,13 @@ func main() {
 	probeInterval, _ := time.ParseDuration(envOr("PROBE_INTERVAL", "30s"))
 	prober := probe.NewProber(store)
 	prober.Timeout = 3 * time.Second
-	syncer := out.NewSyncer(store, envOr("EDGE_CONFIG_PATH", "/configs/config.json"), out.Options{})
+	// evicted 重试周期可配 (dev/chaos 需快回池; 线上保持默认 2m)
+	if rp, err := time.ParseDuration(envOr("PROBE_RETRY_PERIOD", "")); err == nil && rp > 0 {
+		prober.RetryPeriod = rp
+	}
+	syncer := out.NewSyncer(store, envOr("EDGE_CONFIG_PATH", "/configs/config.json"), out.Options{
+		AccessLogPath: envOr("EDGE_ACCESS_LOG", ""), // 设路径后 edge 按连接记 access log; load-50 用它按 outbound tag 聚合分流
+	})
 
 	// 订阅拉取: 无来源时 poller 为 nil(管理页禁用拉取/手动按钮)
 	var poller *sub.Poller

@@ -1,12 +1,14 @@
 # air 热重载配置 (容器内工作目录 /src = 挂载的 services/ingest)
+# air@latest (v1.5x+) 新式 schema: build 命令/产物在 [build] 段
 root = "."
-build_cmd = "go build -o /tmp/ingest-bin ./cmd/ingest"
-main_file = "cmd/ingest/main.go"
-custom_bin = "/tmp/ingest-bin"
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/ingest-bin ./cmd/ingest"
+  bin = "./tmp/ingest-bin"
 
 [log]
   time = true
 
 [watch]
-  include = ["*.go", "go.mod", ".air.toml"]
-  exclude = ["testdata"]
+  exclude = ["tmp", "testdata"]
