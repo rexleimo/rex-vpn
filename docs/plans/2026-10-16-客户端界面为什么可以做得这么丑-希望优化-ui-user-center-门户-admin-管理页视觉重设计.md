@@ -127,3 +127,21 @@
 **验证**: 4 模块 vet+test PASS; e2e-full 双线 ALL PASS; chaos 全链路绿(注: 摘除风暴期 config_write 高频 → edge 15s 级重启会造成瞬时 0/20, 属池环境波动非代码回归, 稳定后复跑绿); 浏览器实跑 add→edit→delete 闭环 + 截图 `.shots/s1-*.png`、`crud-*.png`。
 
 **下一切片 S2**: 节点页(服务端搜索/过滤/分页 `/api/nodes?q=&status=&page=&size=` + 摘除/回池确认+toast) + 事件页游标分页; 之后 S3=用户页+门户 toast 集成; S4=退役 app.css/wm-*。
+
+## S2 执行结果 (2026-10-16)
+
+**交付**: 节点页服务端搜索/过滤/分页 + 事件游标分页 + 摘除/回池确认+toast
+- store: `QueryNodes(NodeQuery{Q,Status,Page,Size})→rows+total`、`ListEventsBefore(cursor)`; 无参=全量旧契约保持(chaos/load-50 不破)。
+- API: `/api/nodes?q=&status=&page=&size=`(总数走 `X-Total-Count` header, 数组体不变)、`/api/events?before=&limit=`(EventView 新增 ID 游标字段)。
+- 页面: 节点页工具栏(搜索/状态/每页/查询)+分页控件+5s 轮询当前条件(只换 tbody); 摘除/回池 = 确认弹窗+toast(SSR 表单与轮询 JS 同一契约); 事件页"加载更多"游标。
+- 页面默认 25/页, API 无参仍全量(双模式边界)。
+
+**chaos 方法论修复(两处真实盲区)**:
+1. evict 事件确认后立即探针会撞上 config_write→edge 重启的 ~2s 断连窗口(假阳性根因) → 加 config_write 静默 ≥8s 稳定等待; 恢复后段同理 sleep 10。
+2. 样本 20→40: 池真实成功率 ~90% 时 20 样本方差过大(14-16/20 反复踩 80% 线)。
+3. 目标在 DROP 生效前已被池抖动自行摘除 → 视为已出池放行(仍 active 才判真失败)。
+修复后实跑: 基线 36/40, DROP 期 36/40(持平), 恢复后 32/40, 全链路 PASS。
+
+**验证**: 4 模块 vet+test PASS(新增 TestNodesPaginationAndEventsCursor); e2e-full 双线 ALL PASS; chaos PASS; 浏览器实跑分页/搜索空态/摘除→自动回池闭环(截图 `.shots/s2-*.png`)。
+
+**下一切片 S3**: 用户页服务端搜索(`/api/users?q=`) + 门户 toast 集成(复制/换token/下单/登录失败保留输入) + 总览页 Bootstrap 化; S4: 事件页视觉微调+退役 app.css/wm-*。

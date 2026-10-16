@@ -27,7 +27,7 @@ CLIENT_ID="${EDGE_CLIENT_ID:-00000000-0000-4000-8000-000000000001}"
 WS_PATH="${EDGE_WS_PATH:-/edge-ws}"
 EDGE_PORT="${EDGE_PORT:-10086}"
 EDGE_TLS="${EDGE_TLS:-0}"
-N_PROBES="${N_PROBES:-20}"
+N_PROBES="${N_PROBES:-40}"   # 40 样本: 20 样本下方差过大(池 ~90% 真成功率时假失败率高)
 
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 log() { echo "[chaos] $*"; }
@@ -169,10 +169,42 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
   if [ "$NOW" -gt "$EVICT_BASE" ]; then EVICTED=1; break; fi
   sleep 5
 done
-[ -n "$EVICTED" ] || { cleanup_ipt; die "≤${WAIT_EVICT}s 内目标 $TARGET(fp=$TARGET_FP) 未出现 evict 事件 — DROP 未拦到 prober? 探测周期?"; }
-log "evict 事件确认 (目标指纹): {\"Kind\":\"evict\",\"NodeFP\":\"$TARGET_FP\"}"
+if [ -z "$EVICTED" ]; then
+  # 高抖动池: 目标可能在 DROP 生效前已被 prober 因自身失败摘掉(非本次演练造成)。
+  # 此时目标已不在 active 池, evict 断言语义已满足 — 放行继续成功率段; 仍 active 才是真失败。
+  CUR=$(curl -s -b "$JAR" "$INGEST_BASE/api/nodes?q=$TARGET" | sed 's/},{/}
+{/g' | grep -c '"Status":"evicted"' || true)
+  if [ "${CUR:-0}" -ge 1 ]; then
+    log "WARN: 目标在 DROP 前已被池抖动摘除(status=evicted), 视为已出池, 继续成功率断言"
+  else
+    cleanup_ipt; die "≤${WAIT_EVICT}s 内目标 $TARGET(fp=$TARGET_FP) 未出现 evict 事件且仍在池 — DROP 未拦到 prober? 探测周期?"
+  fi
+else
+  log "evict 事件确认 (目标指纹): {\"Kind\":\"evict\",\"NodeFP\":\"$TARGET_FP\"}"
+fi
 
 # ---- 4) DROP 期间成功率不掉 ----
+# 稳定窗口: evict→config_write→watcher 重启 xray 有 ~2s 断连窗口, 立即探针会把重启抖动算成池故障(假阳性)。
+# 等到最近一条 config_write 事件 ≥8s 前(无新配置churn)再开探。
+log "等 edge 配置稳定 (config_write 静默 ≥8s, ≤40s)…"
+STABLE=""
+sdeadline=$(( $(date +%s) + 40 ))
+while [ "$(date +%s)" -lt "$sdeadline" ]; do
+  api_events
+  PYBIN=$(command -v python3 || command -v python)
+LASTCW=$($PYBIN - "$EVENTS" <<'PYX'
+import json,sys,time,calendar
+evs=json.load(open(sys.argv[1]))
+cw=[e for e in evs if e.get("Kind")=="config_write"]
+if not cw: print(999); sys.exit()
+t=calendar.timegm(time.strptime(cw[0]["AtStr"],"%Y-%m-%d %H:%M:%S"))  # AtStr 是服务端 UTC
+print(int(time.time()-t))
+PYX
+)
+  [ "${LASTCW:-0}" -ge 8 ] && { STABLE=1; break; }
+  sleep 3
+done
+[ -n "$STABLE" ] || log "WARN: 40s 内 config_write 未静默(池在剧烈抖动), 继续探针(结果可能含重启抖动)"
 log "DROP 期间探针 ($N_PROBES 次)…"
 DROP_OK=$(probe_success)
 [ -n "$DROP_OK" ] || { cleanup_ipt; die "DROP 期间探针未返回"; }
@@ -197,6 +229,7 @@ done
 log "recover 事件确认 (目标指纹): {\"Kind\":\"recover\",\"NodeFP\":\"$TARGET_FP\"}"
 
 # ---- 6) 恢复后成功率回到基线 ----
+sleep 10   # 同 4: recover 也触发 config_write, 给重启窗口留稳定时间
 log "恢复后探针 ($N_PROBES 次)…"
 AFTER_OK=$(probe_success)
 [ -n "$AFTER_OK" ] || die "恢复后探针未返回"

@@ -89,9 +89,11 @@ const pageTemplates = `
 
 {{define "nodeOps"}}
 {{if eq .Status "active"}}
-<form method="POST" action="/admin/nodes/evict"><input type="hidden" name="fp" value="{{.Fingerprint}}"><button class="wm-btn wm-btn-danger wm-btn-sm" type="submit">摘除</button></form>
+<form method="POST" action="/admin/nodes/evict" class="d-inline" data-wm-danger data-wm-title="确认摘除" data-wm-ok="摘除" data-wm-flash="已摘除并同步出口"
+  onsubmit="return wmConfirmAct(event, this, '{{substr .Fingerprint 0 8}} 将把节点从出口池移除并立即同步 xray 配置。确定?')"><input type="hidden" name="fp" value="{{.Fingerprint}}"><button class="btn btn-outline-danger btn-sm" type="submit">摘除</button></form>
 {{else if eq .Status "evicted"}}
-<form method="POST" action="/admin/nodes/recover"><input type="hidden" name="fp" value="{{.Fingerprint}}"><button class="wm-btn wm-btn-sm" type="submit">恢复</button></form>
+<form method="POST" action="/admin/nodes/recover" class="d-inline" data-wm-title="确认恢复" data-wm-ok="恢复" data-wm-flash="已回池并同步出口"
+  onsubmit="return wmConfirmAct(event, this, '{{substr .Fingerprint 0 8}} 将把节点放回出口池并立即同步 xray 配置。确定?')"><input type="hidden" name="fp" value="{{.Fingerprint}}"><button class="btn btn-outline-secondary btn-sm" type="submit">恢复</button></form>
 {{end}}
 {{end}}
 
@@ -222,99 +224,178 @@ function wmEditSave(ev, form){
 {{end}}
 
 {{define "pageNodes"}}
-<h1 class="wm-h1">节点</h1>
-<section class="wm-card">
-  <h2 class="wm-card-title">节点池 <span class="wm-badge wm-badge-info">5s 轮询</span></h2>
-  <table class="wm-table" id="nodes-table">
-    <thead><tr><th>指纹</th><th>地址</th><th>协议</th><th>状态</th><th>延迟</th><th>最近见</th><th>操作</th></tr></thead>
+<h1 class="wm-display fs-2 mb-4">节点</h1>
+<div class="card p-4">
+  <form class="row g-2 align-items-center mb-3" id="node-filter" method="GET" action="/admin/nodes">
+    <div class="col-12 col-md-5">
+      <input class="form-control" name="q" placeholder="搜索指纹 / 地址 / tag" value="{{.Q}}">
+    </div>
+    <div class="col-6 col-md-3">
+      <select class="form-select" name="status">
+        <option value=""{{if eq .Status ""}} selected{{end}}>全部状态</option>
+        <option value="active"{{if eq .Status "active"}} selected{{end}}>active</option>
+        <option value="evicted"{{if eq .Status "evicted"}} selected{{end}}>evicted</option>
+        <option value="pending"{{if eq .Status "pending"}} selected{{end}}>pending</option>
+      </select>
+    </div>
+    <div class="col-3 col-md-2">
+      <select class="form-select" name="size">
+        <option value="25"{{if or (eq .Size 0) (eq .Size 25)}} selected{{end}}>25/页</option>
+        <option value="50"{{if eq .Size 50}} selected{{end}}>50/页</option>
+        <option value="100"{{if eq .Size 100}} selected{{end}}>100/页</option>
+      </select>
+    </div>
+    <div class="col-3 col-md-2 d-grid">
+      <button class="btn btn-primary" type="submit">查询</button>
+    </div>
+  </form>
+  <div class="table-responsive">
+  <table class="table table-hover align-middle mb-0" id="nodes-table">
+    <thead><tr><th>指纹</th><th>地址</th><th>协议</th><th>状态</th><th>延迟</th><th>最近见</th><th class="text-end">操作</th></tr></thead>
     <tbody id="nodes-body">
       {{range .Nodes}}
       <tr>
-        <td class="wm-mono wm-dim">{{substr .Fingerprint 0 8}}</td>
+        <td class="wm-mono wm-muted">{{substr .Fingerprint 0 8}}</td>
         <td>{{.Addr}}:{{.Port}}</td>
         <td>{{.Protocol}}</td>
-        <td>{{template "badge" (dict "Text" .Status "Variant" .StatusVar)}}</td>
+        <td><span class="badge wm-badge-{{.StatusVar}}">{{.Status}}</span></td>
         <td>{{.LatencyStr}}</td>
-        <td class="wm-dim">{{.LastSeenStr}}</td>
-        <td class="wm-ops">{{template "nodeOps" .}}</td>
+        <td class="wm-muted small">{{.LastSeenStr}}</td>
+        <td class="text-end">{{template "nodeOps" .}}</td>
       </tr>
       {{else}}
-      <tr><td colspan="7" class="wm-dim">暂无节点</td></tr>
+      <tr><td colspan="7" class="wm-muted text-center py-4">无匹配节点</td></tr>
       {{end}}
     </tbody>
   </table>
-</section>
+  </div>
+  <div class="d-flex justify-content-between align-items-center mt-3">
+    <span class="wm-muted small">共 <span id="nodes-total">{{.Total}}</span> 个 · 第 <span id="nodes-page">{{if gt .Page 0}}{{.Page}}{{else}}1{{end}}</span> 页 <span class="badge text-bg-info">5s 轮询</span></span>
+    <div class="btn-group btn-group-sm">
+      <button class="btn btn-outline-secondary" id="pg-prev">上一页</button>
+      <button class="btn btn-outline-secondary" id="pg-next">下一页</button>
+    </div>
+  </div>
+</div>
 <script>
-// 7.3: 5s 轮询 JSON 端点刷新表格区, 不整页刷新。
+// S2: 搜索/过滤/分页全部服务端(/api/nodes?q=&status=&page=&size=, 总数走 X-Total-Count);
+// 5s 轮询当前查询条件, 只换 tbody 不闪页。摘除/回池 = 确认弹窗 + toast。
 (function () {
-  const body = document.getElementById('nodes-body');
-  const BADGE = {active:'wm-badge-active',pending:'wm-badge-pending',evicted:'wm-badge-evicted'};
-  async function refresh(){
-    try {
-      const r = await fetch('/api/nodes');
-      if (!r.ok) return;
-      const nodes = await r.json();
-      body.innerHTML = '';
-      if (!nodes || !nodes.length) {
-        body.innerHTML = '<tr><td colspan="7" class="wm-dim">暂无节点</td></tr>';
-        return;
-      }
-      for (const n of nodes) {
-        const tr = document.createElement('tr');
-        tr.innerHTML =
-          '<td class="wm-mono wm-dim"></td><td></td><td></td><td></td><td></td><td class="wm-dim"></td><td class="wm-ops"></td>';
-        tr.cells[0].textContent = (n.Fingerprint||'').slice(0,8);
-        tr.cells[1].textContent = n.Addr + ':' + n.Port;
-        tr.cells[2].textContent = n.Protocol;
-        const b = document.createElement('span');
-        b.className = 'wm-badge ' + (BADGE[n.Status] || 'wm-badge-pending');
-        b.textContent = n.Status;
-        tr.cells[3].appendChild(b);
-        tr.cells[4].textContent = n.LatencyStr || '—';
-        tr.cells[5].textContent = n.LastSeenStr || '—';
-        const ops = tr.cells[6];
-        if (n.Status === 'active') {
-          ops.appendChild(makeForm('/admin/nodes/evict', n.Fingerprint, '摘除', true));
-        } else if (n.Status === 'evicted') {
-          ops.appendChild(makeForm('/admin/nodes/recover', n.Fingerprint, '恢复', false));
-        }
-        body.appendChild(tr);
-      }
-    } catch (e) { /* 轮询失败静默, 下轮再试 */ }
+  var BADGE = {active:'text-bg-success',pending:'text-bg-secondary',evicted:'text-bg-danger'};
+  var page = {{if gt .Page 0}}{{.Page}}{{else}}1{{end}}, size = {{if gt .Size 0}}{{.Size}}{{else}}25{{end}}, total = {{.Total}};
+  var q = "{{.Q}}", status = "{{.Status}}";
+  var body = document.getElementById('nodes-body');
+  function param(k, v) { return encodeURIComponent(k) + '=' + encodeURIComponent(v == null ? '' : v); }
+  function queryUrl(p) {
+    return '/api/nodes?' + param('q', q) + '&' + param('status', status) + '&' + param('page', p) + '&' + param('size', size);
   }
-  function makeForm(action, fp, label, danger){
-    const f = document.createElement('form');
-    f.method='POST'; f.action=action;
-    const inp = document.createElement('input');
-    inp.type='hidden'; inp.name='fp'; inp.value=fp; f.appendChild(inp);
-    const btn = document.createElement('button');
-    btn.type='submit'; btn.textContent=label;
-    btn.className = 'wm-btn wm-btn-sm' + (danger ? ' wm-btn-danger' : '');
-    f.appendChild(btn); return f;
+  function opForm(action, fp, label, danger) {
+    var title = danger ? '确认摘除' : '确认恢复';
+    var text = danger ? ' 将把节点从出口池移除并立即同步 xray 配置。确定?' : ' 将把节点放回出口池并立即同步 xray 配置。确定?';
+    var flash = danger ? '已摘除并同步出口' : '已回池并同步出口';
+    var f = document.createElement('form');
+    f.method = 'POST'; f.action = action; f.className = 'd-inline';
+    if (danger) f.setAttribute('data-wm-danger', '');
+    f.setAttribute('data-wm-title', title);
+    f.setAttribute('data-wm-ok', label);
+    f.setAttribute('data-wm-flash', flash);
+    f.onsubmit = function (ev) { return wmConfirmAct(ev, f, fp.slice(0, 8) + text); };
+    var inp = document.createElement('input');
+    inp.type = 'hidden'; inp.name = 'fp'; inp.value = fp; f.appendChild(inp);
+    var btn = document.createElement('button');
+    btn.type = 'submit'; btn.textContent = label;
+    btn.className = 'btn btn-outline-' + (danger ? 'danger' : 'secondary') + ' btn-sm';
+    f.appendChild(btn);
+    return f;
   }
-  refresh();
-  setInterval(refresh, 5000);
+  function render(nodes) {
+    body.innerHTML = '';
+    if (!nodes.length) {
+      body.innerHTML = '<tr><td colspan="7" class="wm-muted text-center py-4">无匹配节点</td></tr>';
+      return;
+    }
+    nodes.forEach(function (n) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td class="wm-mono wm-muted"></td><td></td><td></td><td></td><td></td><td class="wm-muted small"></td><td class="text-end"></td>';
+      tr.cells[0].textContent = (n.Fingerprint || '').slice(0, 8);
+      tr.cells[1].textContent = n.Addr + ':' + n.Port;
+      tr.cells[2].textContent = n.Protocol;
+      var b = document.createElement('span');
+      b.className = 'badge ' + (BADGE[n.Status] || 'text-bg-secondary');
+      b.textContent = n.Status;
+      tr.cells[3].appendChild(b);
+      tr.cells[4].textContent = n.LatencyStr || '—';
+      tr.cells[5].textContent = n.LastSeenStr || '—';
+      if (n.Status === 'active') tr.cells[6].appendChild(opForm('/admin/nodes/evict', n.Fingerprint, '摘除', true));
+      else if (n.Status === 'evicted') tr.cells[6].appendChild(opForm('/admin/nodes/recover', n.Fingerprint, '恢复', false));
+      body.appendChild(tr);
+    });
+  }
+  function load(p) {
+    page = p;
+    fetch(queryUrl(p)).then(function (r) {
+      total = parseInt(r.headers.get('X-Total-Count') || '0', 10);
+      return r.json();
+    }).then(render).catch(function () {});
+    document.getElementById('nodes-page').textContent = p;
+    document.getElementById('nodes-total').textContent = total;
+  }
+  document.getElementById('pg-prev').onclick = function () { if (page > 1) load(page - 1); };
+  document.getElementById('pg-next').onclick = function () { if (page * size < total) load(page + 1); };
+  setInterval(function () { load(page); }, 5000);
 })();
 </script>
 {{end}}
 
 {{define "pageEvents"}}
-<h1 class="wm-h1">事件时间线</h1>
-<section class="wm-card">
-  {{if .Events}}
-  <ul class="wm-timeline">
+<h1 class="wm-display fs-2 mb-4">事件时间线</h1>
+<div class="card p-4">
+  <ul class="list-group list-group-flush" id="ev-list">
     {{range .Events}}
-    <li>
+    <li class="list-group-item d-flex flex-wrap gap-2 align-items-center px-0" data-ev-id="{{.ID}}">
       {{template "badge" (dict "Text" .Kind "Variant" .KindVar)}}
-      <span class="wm-dim">{{.AtStr}}</span>
-      <span class="wm-mono wm-dim">{{.NodeFP}}</span>
-      <span>{{.From}} → {{.To}}</span>
-      <span class="wm-dim">{{.Detail}}</span>
+      <span class="wm-muted small">{{.AtStr}}</span>
+      <span class="wm-mono wm-muted">{{substr .NodeFP 0 8}}</span>
+      {{if .From}}<span class="small">{{.From}} → {{.To}}</span>{{end}}
+      <span class="wm-muted small flex-grow-1">{{.Detail}}</span>
     </li>
+    {{else}}
+    <li class="list-group-item px-0 wm-muted text-center py-4">暂无事件</li>
     {{end}}
   </ul>
-  {{else}}<div class="wm-dim">暂无事件</div>{{end}}
-</section>
+  <div class="text-center mt-3">
+    <button class="btn btn-outline-secondary btn-sm" id="ev-more"{{if not .HasMore}} style="display:none"{{end}}>加载更多</button>
+  </div>
+</div>
+<script>
+// S2: 时间游标分页(/api/events?before=&limit=), before=当前末行 id。
+(function () {
+  var btn = document.getElementById('ev-more');
+  if (!btn) return;
+  btn.addEventListener('click', function () {
+    var items = document.querySelectorAll('#ev-list [data-ev-id]');
+    var before = items.length ? items[items.length - 1].getAttribute('data-ev-id') : '';
+    fetch('/api/events?before=' + before + '&limit=50').then(function (r) { return r.json(); }).then(function (evs) {
+      if (!evs.length) { btn.style.display = 'none'; return; }
+      var BADGE = {danger: 'text-bg-danger', success: 'text-bg-success', info: 'text-bg-info'};
+      evs.forEach(function (e) {
+        var li = document.createElement('li');
+        li.className = 'list-group-item d-flex flex-wrap gap-2 align-items-center px-0';
+        li.setAttribute('data-ev-id', e.ID);
+        li.innerHTML = '<span class="badge ' + (BADGE[e.KindVar] || 'text-bg-info') + '"></span>' +
+          '<span class="wm-muted small"></span><span class="wm-mono wm-muted"></span>' +
+          '<span class="small"></span><span class="wm-muted small flex-grow-1"></span>';
+        li.children[0].textContent = e.Kind;
+        li.children[1].textContent = e.AtStr;
+        li.children[2].textContent = (e.NodeFP || '').slice(0, 8);
+        li.children[3].textContent = e.From ? (e.From + ' → ' + e.To) : '';
+        li.children[4].textContent = e.Detail || '';
+        document.getElementById('ev-list').appendChild(li);
+      });
+    });
+  });
+})();
+</script>
 {{end}}
 
 {{define "pageUsers"}}

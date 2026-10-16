@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -299,4 +300,81 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// S2/ADR-0004: 节点服务端搜索/过滤/分页 + 事件游标; 无参=全量旧契约保持。
+func TestNodesPaginationAndEventsCursor(t *testing.T) {
+	h, store := newHandler(t)
+	mux := h.Router()
+	cookie := withCookie(t, login(t, h))
+	ctx := context.Background()
+	for i := 0; i < 5; i++ {
+		if err := store.UpsertRow(ctx, &db.NodeRow{
+			Fingerprint: fmt.Sprintf("fp%032d", i), Address: fmt.Sprintf("10.0.0.%d", i),
+			Port: 443, Protocol: "vless", Status: "active", Tag: fmt.Sprintf("tag-%d", i),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.UpsertRow(ctx, &db.NodeRow{Fingerprint: "deadbeefdeadbeefdeadbeefdeadbeef", Address: "1.2.3.4", Port: 80, Status: "evicted"}); err != nil {
+		t.Fatal(err)
+	}
+	get := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, nil)
+		req.AddCookie(&cookie)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+	// 无参 = 全量数组(旧脚本契约), X-Total-Count=6
+	rec := get("/api/nodes")
+	var all []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &all); err != nil {
+		t.Fatalf("unparam /api/nodes must stay array: %v", err)
+	}
+	if len(all) != 6 || rec.Header().Get("X-Total-Count") != "6" {
+		t.Fatalf("all = %d total=%s, want 6/6", len(all), rec.Header().Get("X-Total-Count"))
+	}
+	// 分页: size=2 page=2 → 2 行, total=6
+	rec = get("/api/nodes?size=2&page=2")
+	var pg []map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &pg)
+	if len(pg) != 2 || rec.Header().Get("X-Total-Count") != "6" {
+		t.Fatalf("page2 = %d rows total=%s, want 2/6", len(pg), rec.Header().Get("X-Total-Count"))
+	}
+	// 状态过滤
+	rec = get("/api/nodes?status=evicted")
+	json.Unmarshal(rec.Body.Bytes(), &pg)
+	if len(pg) != 1 || pg[0]["Status"] != "evicted" {
+		t.Fatalf("status filter = %+v", pg)
+	}
+	// 搜索(地址)
+	rec = get("/api/nodes?q=10.0.0.3")
+	json.Unmarshal(rec.Body.Bytes(), &pg)
+	if len(pg) != 1 {
+		t.Fatalf("q search = %+v, want 1", pg)
+	}
+	// 事件游标: 插 60 条, before=末 id 取 50 → 无重叠
+	for i := 0; i < 60; i++ {
+		if err := store.RecordEvent(ctx, db.Event{Kind: "evict", NodeFP: "x", Detail: fmt.Sprintf("d%d", i)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec = get("/api/events?limit=50")
+	var evs []map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &evs)
+	if len(evs) != 50 {
+		t.Fatalf("events page1 = %d, want 50", len(evs))
+	}
+	lastID := int64(evs[49]["ID"].(float64))
+	rec = get(fmt.Sprintf("/api/events?before=%d&limit=50", lastID))
+	json.Unmarshal(rec.Body.Bytes(), &evs)
+	if len(evs) != 10 {
+		t.Fatalf("events page2 = %d, want 10", len(evs))
+	}
+	for _, e := range evs {
+		if int64(e["ID"].(float64)) >= lastID {
+			t.Fatal("cursor overlap")
+		}
+	}
 }

@@ -280,11 +280,64 @@ func (s *Store) ListNodes(ctx context.Context, status string) ([]NodeRow, error)
 	return out, nil
 }
 
+// NodeQuery 是节点页服务端搜索/过滤/分页参数(ADR-0004)。零值 = 无过滤/全量(旧契约兼容)。
+type NodeQuery struct {
+	Q      string // 指纹/地址/tag 子串匹配(不区分大小写)
+	Status string // active|evicted|pending, 空=全部
+	Page   int    // 1-based; 0/1 且 Size=0 → 全量
+	Size   int    // 0 → 不分页
+}
+
+// QueryNodes 按条件取节点 + 命中总数(分页控件用)。无过滤时等价 ListNodes 全量。
+func (s *Store) QueryNodes(ctx context.Context, nq NodeQuery) ([]NodeRow, int64, error) {
+	base := s.db.WithContext(ctx).Model(&NodeRow{})
+	if nq.Status != "" {
+		base = base.Where("status = ?", nq.Status)
+	}
+	if nq.Q != "" {
+		like := "%" + nq.Q + "%"
+		base = base.Where("lower(fingerprint) LIKE lower(?) OR address LIKE ? OR tag LIKE ?", like, like, like)
+	}
+	var total int64
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	q := base.Session(&gorm.Session{}).Order("latency_ms")
+	if nq.Size > 0 {
+		page := nq.Page
+		if page < 1 {
+			page = 1
+		}
+		q = q.Offset((page - 1) * nq.Size).Limit(nq.Size)
+	}
+	var out []NodeRow
+	if err := q.Find(&out).Error; err != nil {
+		return nil, 0, err
+	}
+	return out, total, nil
+}
+
 func (s *Store) RecordEvent(ctx context.Context, e Event) error {
 	if e.ID == 0 {
 		e.At = time.Now()
 	}
 	return s.db.WithContext(ctx).Create(&e).Error
+}
+
+// ListEventsBefore 时间游标分页(事件页"加载更多"): 取 id < before 的一批; before<=0 = 从最新开始。
+func (s *Store) ListEventsBefore(ctx context.Context, before int64, limit int) ([]Event, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	q := s.db.WithContext(ctx).Order("id desc").Limit(limit)
+	if before > 0 {
+		q = q.Where("id < ?", before)
+	}
+	var out []Event
+	if err := q.Find(&out).Error; err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Store) ListEvents(ctx context.Context, limit int) ([]Event, error) {

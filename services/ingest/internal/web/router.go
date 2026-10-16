@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -54,6 +55,7 @@ type NodeView struct {
 }
 
 type EventView struct {
+	ID          int64 `json:"ID"`
 	Kind        string
 	KindVar     string
 	NodeFP      string
@@ -92,10 +94,16 @@ type UpstreamsData struct {
 	Err       string
 }
 type NodesData struct {
-	Nodes []NodeView
+	Nodes  []NodeView
+	Q      string
+	Status string
+	Page   int
+	Size   int
+	Total  int
 }
 type EventsData struct {
-	Events []EventView
+	Events  []EventView
+	HasMore bool
 }
 type UsersData struct {
 	Configured bool
@@ -256,19 +264,44 @@ func (h *Handler) upstreams(c *gin.Context) {
 }
 
 func (h *Handler) nodes(c *gin.Context) {
-	ctx := c.Request.Context()
-	rows, _ := h.Store.ListNodes(ctx, "")
+	nq := nodeQueryFrom(c)
+	if c.Query("size") == "" {
+		nq.Size = 25 // 页面默认 25/页; API 无参仍全量(旧脚本契约)
+	}
+	rows, total, _ := h.Store.QueryNodes(c.Request.Context(), nq)
 	views := make([]NodeView, 0, len(rows))
 	for _, n := range rows {
 		views = append(views, h.nodeView(n))
 	}
-	h.page(c, Page{Title: "节点", Active: "nodes", Content: "pageNodes", PageData: NodesData{Nodes: views}})
+	h.page(c, Page{Title: "节点", Active: "nodes", Content: "pageNodes", PageData: NodesData{
+		Nodes: views, Q: nq.Q, Status: nq.Status, Page: nq.Page, Size: nq.Size, Total: int(total),
+	}})
+}
+
+// nodeQueryFrom 解析 ?q=&status=&page=&size=; 默认 size=25(页面), API 无 size=全量兼容旧脚本。
+func nodeQueryFrom(c *gin.Context) db.NodeQuery {
+	nq := db.NodeQuery{Q: c.Query("q"), Status: c.Query("status"), Page: atoiOr(c.Query("page"), 1)}
+	if v := c.Query("size"); v != "" {
+		nq.Size = atoiOr(v, 0)
+	}
+	return nq
+}
+
+func atoiOr(v string, def int) int {
+	if n, err := strconv.Atoi(v); err == nil && n > 0 {
+		return n
+	}
+	return def
 }
 
 func (h *Handler) events(c *gin.Context) {
-	evs, _ := h.Store.ListEvents(c.Request.Context(), 200)
+	evs, _ := h.Store.ListEventsBefore(c.Request.Context(), 0, 51)
+	hasMore := len(evs) > 50
+	if hasMore {
+		evs = evs[:50]
+	}
 	h.page(c, Page{Title: "事件", Active: "events", Content: "pageEvents",
-		PageData: EventsData{Events: eventViews(evs)}})
+		PageData: EventsData{Events: eventViews(evs), HasMore: hasMore}})
 }
 
 func (h *Handler) users(c *gin.Context) {
@@ -451,17 +484,30 @@ func (h *Handler) apiUpstreams(c *gin.Context) {
 }
 
 func (h *Handler) apiNodes(c *gin.Context) {
-	rows, _ := h.Store.ListNodes(c.Request.Context(), "")
+	nq := nodeQueryFrom(c)
+	rows, total, err := h.Store.QueryNodes(c.Request.Context(), nq)
+	if err != nil {
+		writeJSON(c.Writer, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
 	views := make([]NodeView, 0, len(rows))
 	for _, n := range rows {
 		views = append(views, h.nodeView(n))
 	}
+	// 数组体保持旧契约(chaos/load-50); 总数走 header, 分页方读 X-Total-Count。
+	c.Header("X-Total-Count", strconv.FormatInt(total, 10))
 	writeJSON(c.Writer, http.StatusOK, views)
 }
 
 func (h *Handler) apiEvents(c *gin.Context) {
-	evs, _ := h.Store.ListEvents(c.Request.Context(), 200)
-	writeJSON(c.Writer, http.StatusOK, eventViews(evs))
+	before := int64(atoiOr(c.Query("before"), 0))
+	limit := atoiOr(c.Query("limit"), 200) // 无参=200 与旧契约一致(chaos 断言窗口)
+	evs, err := h.Store.ListEventsBefore(c.Request.Context(), before, limit)
+	if err != nil {
+		writeJSON(c.Writer, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(c.Writer, http.StatusOK, eventViews(evs)) // EventView.ID = 游标: 下一页 before=末行 id
 }
 
 func (h *Handler) apiUsers(c *gin.Context) {
@@ -509,7 +555,7 @@ func eventViews(evs []db.Event) []EventView {
 	out := make([]EventView, 0, len(evs))
 	for _, e := range evs {
 		out = append(out, EventView{
-			Kind: e.Kind, KindVar: eventVariant(e.Kind),
+			ID: e.ID, Kind: e.Kind, KindVar: eventVariant(e.Kind),
 			NodeFP: e.NodeFP, From: e.From, To: e.To, Detail: e.Detail,
 			AtStr: fmtTime(e.At),
 		})
