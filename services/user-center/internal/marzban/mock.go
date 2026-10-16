@@ -3,12 +3,14 @@ package marzban
 
 import "context"
 
-// Mock 是 Client 的内存实现, 可预置用户/订阅/发票。
+// Mock 是 Client 的内存实现, 可预置用户/订阅/发票; provision 调用被记录。
 type Mock struct {
 	Users    map[string]User
 	Subs     map[string]string // token -> sub 内容
 	Invoices map[string][]Invoice
 	ByPlan   map[string]func(plan string) Invoice
+	Created  []Created
+	Mods     map[string]UserMod
 }
 
 // NewMock 构造一个带默认数据的 Mock。
@@ -25,6 +27,7 @@ func NewMock() *Mock {
 			"test-token": "proxies:\n  - name: n1\n    type: vless\n",
 		},
 		Invoices: map[string][]Invoice{},
+		Mods:     map[string]UserMod{},
 	}
 	return m
 }
@@ -59,4 +62,46 @@ func (m *Mock) CreateInvoice(ctx context.Context, token, plan string) (Invoice, 
 
 func (m *Mock) ListInvoices(ctx context.Context, token string) ([]Invoice, error) {
 	return m.Invoices[token], nil
+}
+
+// CreateUser 记录 provision 并生成可回读的 mock token(mocktok-<user>, 不满足 decodeSubToken, 但 dashboard 直接持 token 使用)。
+func (m *Mock) CreateUser(ctx context.Context, spec UserSpec) (Created, error) {
+	tok := "mocktok-" + spec.Username
+	cr := Created{Username: spec.Username, Token: tok}
+	m.Created = append(m.Created, cr)
+	m.Users[tok] = User{ID: int64(len(m.Users) + 1), Username: spec.Username, Status: "active",
+		ExpireDays: int(spec.Expire), LimitTraffic: spec.DataLimit}
+	if _, ok := m.Subs[tok]; !ok {
+		m.Subs[tok] = "proxies:\n  - name: n1\n    type: vless\n"
+	}
+	return cr, nil
+}
+
+// ModifyUser 按 username 更新 mock 用户并记录。
+func (m *Mock) ModifyUser(ctx context.Context, username string, mod UserMod) error {
+	found := false
+	for tok, u := range m.Users {
+		if u.Username != username {
+			continue
+		}
+		found = true
+		if mod.Expire != nil {
+			u.ExpireDays = int(*mod.Expire)
+		}
+		if mod.DataLimit != nil {
+			u.LimitTraffic = *mod.DataLimit
+		}
+		if mod.UsedTraffic != nil {
+			u.UsedTraffic = *mod.UsedTraffic
+		}
+		if mod.Status != "" {
+			u.Status = mod.Status
+		}
+		m.Users[tok] = u
+	}
+	if !found {
+		return ErrNotFound
+	}
+	m.Mods[username] = mod
+	return nil
 }

@@ -60,20 +60,26 @@ type Client interface {
 	CreateInvoice(ctx context.Context, token, plan string) (Invoice, error)
 	// ListInvoices 订单历史; 当前版本不支持 → 空列表。
 	ListInvoices(ctx context.Context, token string) ([]Invoice, error)
+	// CreateUser 订阅付款后 provision Marzban 用户(409 幂等回读), 返回面板生成的订阅 token。
+	CreateUser(ctx context.Context, spec UserSpec) (Created, error)
+	// ModifyUser 部分更新(续费延期/流量归零/退款断供); username 不存在返回 ErrNotFound。
+	ModifyUser(ctx context.Context, username string, mod UserMod) error
 }
 
 // ErrNotFound 表示 token 无效或用户不存在。
 var ErrNotFound = fmt.Errorf("marzban: user not found")
 
-// Plans 是购买页 3 档套餐(可 env 覆盖)。
+// Plans 是购买页套餐(可 env 覆盖)。WaffoProduct 是 Waffo 订阅产品 ID(空 = 仅 stub 可用)。
 type Plan struct {
-	Name  string
-	Price int64 // 最小货币单位
-	Bytes int64 // 流量
-	Days  int
+	Name         string
+	Price        int64 // 最小货币单位
+	Bytes        int64 // 流量
+	Days         int
+	WaffoProduct string
+	Currency     string // 收银台币种(默认 kit Settings.Currency)
 }
 
-// PlansFromEnv 读 env USERCENTER_PLANS(形如 "name:price:bytes:days;...") 覆盖默认 3 档。
+// PlansFromEnv 读 env USERCENTER_PLANS(形如 "name:price:bytes:days[:waffoProduct[:currency]];...") 覆盖默认 3 档。
 func PlansFromEnv() []Plan {
 	def := []Plan{
 		{Name: "轻量 10GB/月", Price: 990, Bytes: 10 << 30, Days: 30},
@@ -84,13 +90,19 @@ func PlansFromEnv() []Plan {
 		var out []Plan
 		for _, item := range strings.Split(raw, ";") {
 			parts := strings.Split(item, ":")
-			if len(parts) != 4 {
+			if len(parts) < 4 {
 				continue
 			}
 			p := Plan{Name: parts[0]}
 			fmt.Sscanf(parts[1], "%d", &p.Price)
 			fmt.Sscanf(parts[2], "%d", &p.Bytes)
 			fmt.Sscanf(parts[3], "%d", &p.Days)
+			if len(parts) > 4 {
+				p.WaffoProduct = parts[4]
+			}
+			if len(parts) > 5 {
+				p.Currency = parts[5]
+			}
 			out = append(out, p)
 		}
 		if len(out) > 0 {
@@ -280,8 +292,17 @@ func (c *httpClient) ListInvoices(ctx context.Context, token string) ([]Invoice,
 	return nil, nil
 }
 
+// CreateUser/ModifyUser 实现在 provision.go(接口声明在此处补齐 disabled/mock 对齐)。
+
 // Disabled 是返回 ErrNotFound 的桩 client, 供 Marzban 未配置/未联调时使用(避免 nil 接口 panic)。
 type disabled struct{}
+
+func (disabled) CreateUser(ctx context.Context, spec UserSpec) (Created, error) {
+	return Created{}, ErrNotSupported
+}
+func (disabled) ModifyUser(ctx context.Context, username string, mod UserMod) error {
+	return ErrNotSupported
+}
 
 func (disabled) GetUserByToken(ctx context.Context, token string) (User, error) {
 	return User{}, ErrNotFound
