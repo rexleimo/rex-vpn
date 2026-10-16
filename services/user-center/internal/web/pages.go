@@ -265,12 +265,14 @@ const userLayout = `
           <div class="wm-muted small">{{.Desc}}</div></div>
         {{end}}
       </div>
+      {{if not .HasBilling}}
       <h2 class="h6 wm-muted">更换 token</h2>
       <p class="wm-muted small mb-2">运营 regenerate 后粘贴新 token, 立即生效</p>
       <form method="POST" action="/subscription/token" data-wm-act="/subscription/token" class="input-group">
         <input class="form-control" type="text" name="token" placeholder="新 token" required>
         <button class="btn btn-outline-secondary" type="submit">更换</button>
       </form>
+      {{end}}
     </div>
   </div>
 </div>
@@ -388,10 +390,11 @@ type Guide struct {
 }
 
 type SubData struct {
-	SubURL  string
-	Guides  []Guide
-	Changed bool
-	Err     string
+	SubURL     string
+	Guides     []Guide
+	Changed    bool
+	Err        string
+	HasBilling bool // 订阅模式下 token 是购买产物, 隐藏自助更换面板
 }
 
 type PlanView struct {

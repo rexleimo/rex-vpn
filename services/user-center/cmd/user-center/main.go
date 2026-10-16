@@ -24,7 +24,14 @@ func main() {
 	log.Printf("user-center %s starting", version)
 
 	// 数据层: Marzban API 代理; 未配置时用禁用桩(页面优雅降级, 联调 work-6 后启用)。
-	client := marzban.NewHTTP()
+	// UC_MARZBAN_STUB=1: 本地开发/E2E 用内存 mock(付款→provision 全链路可验)。
+	var client marzban.Client
+	if os.Getenv("UC_MARZBAN_STUB") == "1" {
+		client = marzban.NewMock()
+		log.Println("MARZBAN: UC_MARZBAN_STUB=1 内存 mock(仅限本地开发)")
+	} else {
+		client = marzban.NewHTTP()
+	}
 	if client == nil {
 		log.Println("MARZBAN_API_BASE 未配置, 使用禁用桩(登录/概览不可用)")
 		client = marzban.Disabled()

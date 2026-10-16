@@ -1,7 +1,10 @@
 // Package marzban 的 mock 实现: 单测/联调前不依赖真实 Marzban(wc-1.3 验收)。
 package marzban
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // Mock 是 Client 的内存实现, 可预置用户/订阅/发票; provision 调用被记录。
 type Mock struct {
@@ -35,6 +38,11 @@ func NewMock() *Mock {
 func (m *Mock) GetUserByToken(ctx context.Context, token string) (User, error) {
 	u, ok := m.Users[token]
 	if !ok {
+		// 开发桩自愈: mocktok-<username> 可重建(真 Marzban 持久化, 重启不丢用户;
+		// UC_MARZBAN_STUB 内存态重启后链接仍在 PG, 这里合成用户避免登录被踢)。
+		if name, found := strings.CutPrefix(token, "mocktok-"); found && name != "" {
+			return User{Username: name, Status: "active"}, nil
+		}
 		return User{}, ErrNotFound
 	}
 	return u, nil

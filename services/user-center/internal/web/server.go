@@ -267,6 +267,7 @@ func (s *Server) subscription(c *gin.Context) {
 	d.SubURL = s.Marzban.SubURL(token)
 	d.Changed = c.Query("changed") != ""
 	d.Err = c.Query("err")
+	d.HasBilling = s.billing != nil
 	d.Guides = []Guide{
 		{Title: "Clash Verge", Desc: "导入订阅链接(右键 → 复制 → 添加订阅)"},
 		{Title: "Stash", Desc: "配置 → 添加远程配置 → 粘贴订阅链接"},
@@ -317,6 +318,10 @@ func (s *Server) retoken(c *gin.Context) {
 }
 
 func (s *Server) purchase(c *gin.Context) {
+	if s.billing != nil { // 订阅模式: 旧一次性购买入口退役, 统一去 /billing
+		c.Redirect(http.StatusSeeOther, "/billing")
+		return
+	}
 	token, _ := s.currentToken(c.Request)
 	invs, _ := s.Marzban.ListInvoices(c.Request.Context(), token)
 	views := make([]PlanView, 0, len(s.Plans))
