@@ -12,7 +12,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:?}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
       POSTGRES_DB: marzban
-    volumes: [postgres-data:/var/lib/postgresql/data]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro   # 首启自动建 rexvpn 库(user-center/authkit)
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 5s
@@ -67,10 +69,15 @@ services:
       context: ../services
       dockerfile: user-center/Dockerfile
     env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       USERCENTER_ADDR: :9200
-      # MARZBAN_API_BASE: http://marzban:8080   # work-6 联调后启用
+      UC_PG_DSN: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/rexvpn?sslmode=disable
+      MARZBAN_API_BASE: http://marzban:8080
       # USERCENTER_SECURE_COOKIES: "1"           # Dokploy HTTPS 反代后置 1
+      # WAFFO_* / UC_PLAN_* 见 env.example; 本地开发可 WAFFO_STUB=1 + UC_MARZBAN_STUB=1
     ports: ["9200:9200"]   # 对外域名 user.<domain> 由 Dokploy 反代接管
     restart: on-failure
 
