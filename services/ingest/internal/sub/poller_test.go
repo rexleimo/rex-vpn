@@ -160,3 +160,22 @@ func TestParseSourceList(t *testing.T) {
 		t.Fatal("want error for empty list")
 	}
 }
+
+// S1 回归: 删除上游必须同步摘除拉取清单, 否则 pollOne 幂等登记复活已删行。
+func TestRemoveSource(t *testing.T) {
+	st, err := db.NewStore("sqlite", filepath.Join(t.TempDir(), "r.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	p := NewPoller(st, []Source{{Name: "a", URL: "http://x"}, {Name: "b", URL: "http://y"}}, time.Minute)
+	p.RemoveSource("a")
+	if len(p.Sources) != 1 || p.Sources[0].Name != "b" {
+		t.Fatalf("sources after remove = %+v", p.Sources)
+	}
+	p.RemoveSource("b")
+	if len(p.Sources) != 0 {
+		t.Fatalf("sources = %+v, want empty", p.Sources)
+	}
+	p.RemoveSource("ghost") // 不存在不 panic
+}

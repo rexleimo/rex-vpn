@@ -71,3 +71,9 @@ func ClientIP(r *http.Request) string {
 	}
 	return host
 }
+
+// WantsJSON fetch 胶水协商(ADR-0003): wm-ui.js 的 wmAction 带 X-WM-Fetch: json 头;
+// 无 JS 环境表单提交不受影响(303 重定向兜底, 渐进增强)。
+func WantsJSON(c *gin.Context) bool {
+	return c.GetHeader("X-WM-Fetch") == "json"
+}

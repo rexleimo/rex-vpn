@@ -21,6 +21,7 @@ services:
     volumes:
       - ../services/ingest:/src
       - ../services/webui:/webui   # 共享模块 (replace ../webui → /webui)
+      - ../services/webkit:/webkit # gin 共享中间件套件 (replace ../webkit → /webkit)
       - ingest-data:/data
       - xray-edge-config:/configs
     ports: ["9100:9100"]   # ingest API 调试

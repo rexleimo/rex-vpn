@@ -219,12 +219,78 @@ func TestWebUISnapshot(t *testing.T) {
 	h.Router().ServeHTTP(rec, req)
 	body := rec.Body.String()
 	for _, want := range []string{
-		"<title>总览 · vpn-master</title>",
-		"wm-nav", "wm-card", "wm-stat-num", "总览",
+		"<title>总览 · vpn-master 管理</title>",
+		`href="/assets/bootstrap.min.css"`, "navbar", "wm-glass",
+		`src="/assets/wm-ui.js"`, `id="wm-toasts"`, `id="wm-confirm"`,
+		"wm-card", "wm-stat-num", "总览", // 未迁移页过渡样式层仍在
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("snapshot missing %q", want)
 		}
+	}
+}
+
+// S1: 上游页 CRUD 契约(编辑弹窗/确认删除/JSON 协商)。
+func TestUpstreamCRUDContract(t *testing.T) {
+	h, store := newHandler(t)
+	mux := h.Router()
+	cookie := withCookie(t, login(t, h))
+
+	// 预置一行上游, 保证删除确认表单渲染进断言范围
+	if _, err := store.AddUpstream(context.Background(), "aaa", "https://x.example.com/s?t=1"); err != nil {
+		t.Fatal(err)
+	}
+	// 页面 DOM: 编辑模态 + 删除确认绑定 + update 端点表单
+	req := httptest.NewRequest("GET", "/admin/upstreams", nil)
+	req.AddCookie(&cookie)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	body := rec.Body.String()
+	for _, want := range []string{`id="wm-edit"`, "/admin/upstreams/update", "wmConfirmAct", "wmOpenEdit"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("upstreams page missing %q", want)
+		}
+	}
+
+	// 添加(JSON 模式)
+	post := func(path string, form string, jsonMode bool) *httptest.ResponseRecorder {
+		r := httptest.NewRequest("POST", path, strings.NewReader(form))
+		r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		if jsonMode {
+			r.Header.Set("X-WM-Fetch", "json")
+		}
+		r.AddCookie(&cookie)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, r)
+		return w
+	}
+	rec = post("/admin/upstreams", "name=bbb&url=https://x.example.com/s?t=1", true)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ok":true`) {
+		t.Fatalf("add json = %d %s", rec.Code, rec.Body.String())
+	}
+	// 重复添加 → 409 {ok:false}
+	rec = post("/admin/upstreams", "name=aaa&url=https://x.example.com/s?t=2", true)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"ok":false`) {
+		t.Fatalf("dup add json = %d %s, want 409 ok:false", rec.Code, rec.Body.String())
+	}
+	// 编辑 URL → ok, 掩码更新
+	rec = post("/admin/upstreams/update", "name=aaa&url=https://y.example.com/s?t=secret9", true)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ok":true`) {
+		t.Fatalf("update json = %d %s", rec.Code, rec.Body.String())
+	}
+	ups, _ := store.ListUpstreams(context.Background())
+	if len(ups) != 2 || !strings.Contains(ups[0].URLMasked, "y.example.com") || strings.Contains(ups[0].URLMasked, "secret9") {
+		t.Fatalf("after update masked = %+v", ups)
+	}
+	// 编辑不存在的来源 → 404
+	rec = post("/admin/upstreams/update", "name=nope&url=https://z/", true)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("update missing = %d, want 404", rec.Code)
+	}
+	// 无 JS 表单路径仍 303(渐进增强兜底)
+	rec = post("/admin/upstreams/update", "name=aaa&url=https://w.example.com/s", false)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("form update = %d, want 303", rec.Code)
 	}
 }
 

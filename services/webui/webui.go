@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-//go:embed components.html app.css theme.css dist/bootstrap.min.css dist/bootstrap.bundle.min.js
+//go:embed components.html app.css theme.css wm-ui.js dist/bootstrap.min.css dist/bootstrap.bundle.min.js
 var assets embed.FS
 
 // CSS 返回组件库样式(页面 <head> 内联)。旧 token 层, admin 未迁移前保留(ADR-0002 后果)。
@@ -41,6 +41,12 @@ func ThemeCSS() template.CSS {
 // Asset 返回 vendored 静态资产(bootstrap css/js)内容与 MIME。
 func Asset(name string) ([]byte, string, bool) {
 	switch name {
+	case "wm-ui.js":
+		b, err := assets.ReadFile(name)
+		if err != nil {
+			return nil, "", false
+		}
+		return b, "application/javascript; charset=utf-8", true
 	case "bootstrap.min.css", "bootstrap.bundle.min.js":
 		b, err := assets.ReadFile("dist/" + name)
 		if err != nil {

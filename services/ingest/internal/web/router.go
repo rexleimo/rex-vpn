@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -74,7 +75,7 @@ type Page struct {
 	Title    string
 	Active   string
 	Degraded bool
-	CSS      string
+	CSS      template.CSS // 内联主题/app 样式为受信嵌入内容, 避开 <style> 上下文净化(ZgotmplZ)
 	Content  string
 	PageData any
 }
@@ -134,10 +135,16 @@ func (h *Handler) Router() *gin.Engine {
 	e.GET("/api/healthz", h.apiHealthz)
 	e.GET("/", func(c *gin.Context) { c.Redirect(http.StatusSeeOther, "/admin") })
 
+	// vendored 静态资产(零构建, 无 CDN)
+	e.GET("/assets/bootstrap.min.css", gin.WrapH(webui.AssetHandler("bootstrap.min.css")))
+	e.GET("/assets/bootstrap.bundle.min.js", gin.WrapH(webui.AssetHandler("bootstrap.bundle.min.js")))
+	e.GET("/assets/wm-ui.js", gin.WrapH(webui.AssetHandler("wm-ui.js")))
+
 	ad := e.Group("/admin", h.guard())
 	ad.GET("", h.overview)
 	ad.GET("/upstreams", h.upstreams)
 	ad.POST("/upstreams", h.upstreamAdd)
+	ad.POST("/upstreams/update", h.upstreamUpdate)
 	ad.POST("/upstreams/delete", h.upstreamDelete)
 	ad.POST("/upstreams/fetch", h.upstreamFetch)
 	ad.GET("/nodes", h.nodes)
@@ -182,7 +189,7 @@ func (h *Handler) guardAPI() gin.HandlerFunc {
 
 func (h *Handler) loginPage(c *gin.Context) {
 	webui.WritePage(c.Writer, h.Template, "layout", Page{
-		Title: "登录", CSS: webui.CSS(), Content: "login",
+		Title: "登录", CSS: template.CSS(string(webui.CSS()) + string(webui.ThemeCSS())), Content: "login",
 		PageData: map[string]any{"Err": c.Query("err") != ""},
 	})
 }
@@ -208,7 +215,8 @@ func (h *Handler) page(c *gin.Context, p Page) {
 	if h.Prober != nil {
 		p.Degraded = h.Prober.Degraded()
 	}
-	p.CSS = webui.CSS()
+	// 过渡期双样式层: app.css(未迁移页) + theme.css(Bootstrap 主题), ADR-0002 后果。
+	p.CSS = template.CSS(webui.CSS() + string(webui.ThemeCSS()))
 	webui.WritePage(c.Writer, h.Template, "layout", p)
 }
 
@@ -289,68 +297,129 @@ func (h *Handler) users(c *gin.Context) {
 	h.page(c, Page{Title: "用户", Active: "users", Content: "pageUsers", PageData: d})
 }
 
-// ---- 管理操作 (7.2) ----
+// ---- 管理操作 (7.2 + S1 CRUD 闭环/ADR-0004) ----
+// 双模式: wm-ui.js fetch(X-WM-Fetch: json) → JSON {ok,flash|error}; 无 JS 表单 → 303 + ?err= 兜底。
+
+func replyOK(c *gin.Context, redirect, flash string) {
+	if webkit.WantsJSON(c) {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "flash": flash})
+		return
+	}
+	c.Redirect(http.StatusSeeOther, redirect)
+}
+
+func replyErr(c *gin.Context, redirect string, code int, msg string) {
+	if webkit.WantsJSON(c) {
+		c.JSON(code, gin.H{"ok": false, "error": msg})
+		return
+	}
+	c.Redirect(http.StatusSeeOther, redirect+"?err="+url.QueryEscape(msg))
+}
+
+const upsRedirect = "/admin/upstreams"
 
 func (h *Handler) upstreamAdd(c *gin.Context) {
 	name := c.PostForm("name")
-	url := c.PostForm("url")
-	if name == "" || url == "" {
-		c.Redirect(http.StatusSeeOther, "/admin/upstreams?err=必填")
+	urlStr := c.PostForm("url")
+	if name == "" || urlStr == "" {
+		replyErr(c, upsRedirect, http.StatusBadRequest, "名称与 URL 必填")
 		return
 	}
-	if _, err := h.Store.AddUpstream(c.Request.Context(), name, url); err != nil {
-		c.Redirect(http.StatusSeeOther, "/admin/upstreams?err="+err.Error())
+	created, err := h.Store.AddUpstream(c.Request.Context(), name, urlStr)
+	if err != nil {
+		replyErr(c, upsRedirect, http.StatusInternalServerError, "入库失败: "+err.Error())
 		return
 	}
-	// 新来源需进 poller 来源清单才能周期拉取: MVP 只入库 + 立即拉一次
+	if !created {
+		replyErr(c, upsRedirect, http.StatusConflict, "来源 "+name+" 已存在")
+		return
+	}
 	if h.Poller != nil {
-		h.Poller.AddSource(sub.Source{Name: name, URL: url})
+		h.Poller.AddSource(sub.Source{Name: name, URL: urlStr})
 		_ = h.Poller.PollOnceFor(c.Request.Context(), name)
 	}
-	c.Redirect(http.StatusSeeOther, "/admin/upstreams")
+	replyOK(c, upsRedirect, "已添加上游 "+name)
+}
+
+// upstreamUpdate 编辑上游 URL(S1: 编辑不再删后重加)。name 是 nodes.source 外键不可改。
+func (h *Handler) upstreamUpdate(c *gin.Context) {
+	name := c.PostForm("name")
+	urlStr := c.PostForm("url")
+	if name == "" || urlStr == "" {
+		replyErr(c, upsRedirect, http.StatusBadRequest, "名称与 URL 必填")
+		return
+	}
+	updated, err := h.Store.UpdateUpstreamURL(c.Request.Context(), name, urlStr)
+	if err != nil {
+		replyErr(c, upsRedirect, http.StatusInternalServerError, "更新失败: "+err.Error())
+		return
+	}
+	if !updated {
+		replyErr(c, upsRedirect, http.StatusNotFound, "来源 "+name+" 不存在")
+		return
+	}
+	if h.Poller != nil && !h.Poller.UpdateSource(name, urlStr) {
+		// 入库已改但运行期拉取清单无此源(env 外手动添加的源重启后丢失, 既有语义)
+		replyOK(c, upsRedirect, "已更新展示, 但该来源不在拉取清单(需重新添加才能拉取)")
+		return
+	}
+	replyOK(c, upsRedirect, "已更新 "+name)
 }
 
 func (h *Handler) upstreamDelete(c *gin.Context) {
 	name := c.PostForm("name")
 	if err := h.Store.DeleteUpstream(c.Request.Context(), name); err != nil {
-		c.Redirect(http.StatusSeeOther, "/admin/upstreams?err="+err.Error())
+		replyErr(c, upsRedirect, http.StatusInternalServerError, "删除失败: "+err.Error())
 		return
 	}
-	c.Redirect(http.StatusSeeOther, "/admin/upstreams")
+	if h.Poller != nil {
+		h.Poller.RemoveSource(name) // 不同步摘除会把已删行复活(pollOne 幂等登记)
+	}
+	replyOK(c, upsRedirect, "已删除 "+name)
 }
 
 func (h *Handler) upstreamFetch(c *gin.Context) {
 	if h.Poller == nil {
-		c.Redirect(http.StatusSeeOther, "/admin/upstreams?err=无已配置上游")
+		replyErr(c, upsRedirect, http.StatusServiceUnavailable, "无已配置上游")
 		return
 	}
 	name := c.PostForm("name")
 	if name != "" {
 		if errs := h.Poller.PollOnceFor(c.Request.Context(), name); len(errs) > 0 {
-			c.Redirect(http.StatusSeeOther, "/admin/upstreams?err="+fmt.Sprint(errs[0]))
+			replyErr(c, upsRedirect, http.StatusBadGateway, fmt.Sprint(errs[0]))
 			return
 		}
-	} else {
-		_ = h.Poller.PollOnce(c.Request.Context())
+		replyOK(c, upsRedirect, "已拉取 "+name)
+		return
 	}
-	c.Redirect(http.StatusSeeOther, "/admin/upstreams")
+	_ = h.Poller.PollOnce(c.Request.Context())
+	replyOK(c, upsRedirect, "拉取已触发")
 }
 
 func (h *Handler) nodeEvict(c *gin.Context) {
 	fp := c.PostForm("fp")
-	if _, err := h.Store.Evict(c.Request.Context(), fp); err == nil {
-		// 手动摘除立即触发一次 xraygen(5.2 触发链)
-		_ = triggerXraygen(c.Request.Context(), h)
+	if _, err := h.Store.Evict(c.Request.Context(), fp); err != nil {
+		replyErr(c, "/admin/nodes", http.StatusInternalServerError, "摘除失败: "+err.Error())
+		return
 	}
-	c.Redirect(http.StatusSeeOther, "/admin/nodes")
+	if err := triggerXraygen(c.Request.Context(), h); err != nil {
+		replyErr(c, "/admin/nodes", http.StatusBadGateway, "已摘除但 xray 同步失败: "+err.Error())
+		return
+	}
+	replyOK(c, "/admin/nodes", "已摘除并同步出口")
 }
 
 func (h *Handler) nodeRecover(c *gin.Context) {
 	fp := c.PostForm("fp")
-	if _, err := h.Store.Recover(c.Request.Context(), fp); err == nil {
-		_ = triggerXraygen(c.Request.Context(), h)
+	if _, err := h.Store.Recover(c.Request.Context(), fp); err != nil {
+		replyErr(c, "/admin/nodes", http.StatusInternalServerError, "回池失败: "+err.Error())
+		return
 	}
-	c.Redirect(http.StatusSeeOther, "/admin/nodes")
+	if err := triggerXraygen(c.Request.Context(), h); err != nil {
+		replyErr(c, "/admin/nodes", http.StatusBadGateway, "已回池但 xray 同步失败: "+err.Error())
+		return
+	}
+	replyOK(c, "/admin/nodes", "已回池并同步出口")
 }
 
 // ---- JSON API (7.4): 供轮询(7.3)/未来客户端/监控 ----

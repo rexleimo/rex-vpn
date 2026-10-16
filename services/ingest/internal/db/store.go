@@ -104,6 +104,17 @@ func (s *Store) AddUpstream(ctx context.Context, name, rawURL string) (bool, err
 	return true, nil
 }
 
+// UpdateUpstreamURL 编辑上游 URL(仅重掩码展示; name 是 nodes.source 外键不可改)。
+// 返回 updated=false 表示来源不存在。
+func (s *Store) UpdateUpstreamURL(ctx context.Context, name, rawURL string) (bool, error) {
+	res := s.db.WithContext(ctx).Model(&Upstream{}).Where("name = ?", name).
+		Update("url_masked", maskURL(rawURL))
+	if res.Error != nil {
+		return false, res.Error
+	}
+	return res.RowsAffected > 0, nil
+}
+
 func (s *Store) ListUpstreams(ctx context.Context) ([]Upstream, error) {
 	var out []Upstream
 	if err := s.db.WithContext(ctx).Order("name").Find(&out).Error; err != nil {

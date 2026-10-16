@@ -70,3 +70,60 @@
   - air 热重载在 Windows bind-mount 下 fsnotify 不触发 → `.air.toml` 开 `build.poll`（v1.67 正确键名，`watch_interval` 无效）；dev compose 补挂 `webkit:/webkit`（replace 目录解析）。
 - **回归门**：webkit/webui/user-center/ingest 4 模块 `go vet`+`go test` 全绿；`e2e-full` 线1+线2 ALL PASS。
 - **待办**：admin 5 页迁移 Bootstrap+theme（迁移后删 app.css/wm-* 旧 token）；`.shots` 已入 gitignore 或按需提交对账图。
+
+## Requirements Decision 2 (2026-10-16 grill, 双端 CRUD 交互重做)
+
+**范围（双端同修）**: 用户门户交互缺陷 + admin 5 页 CRUD 交互与视觉一起修。
+**决策**: ADR-0003 交互载体 = vanilla JS + Bootstrap（共享 wm-ui.js 胶水: toast/confirmAction/fetchJSON）; ADR-0004 = 完整后端化（服务端搜索/过滤/分页 + upstream update 端点；无参=全量兼容旧脚本契约）。
+
+### 验收标准（用户可观察行为）
+
+**admin（ingest :9100）**
+1. 删除上游 → 确认弹窗显示对象名；取消后状态不变；确认后行消失 + toast「已删除」，无整页闪白
+2. 编辑上游 → 行内「编辑」弹窗改名称/URL → 保存 → toast + 行更新（新端点 `POST /admin/upstreams/update`）
+3. 摘除/回池 → 确认弹窗 + toast 成功/失败（失败含原因）；状态徽章即时更新
+4. 手动拉取 → 按钮 loading 态 → toast 报结果（新增/失败计数）
+5. 节点页 → 搜索框(指纹/地址/tag) + 状态过滤 + 分页控件，全部服务端（`/api/nodes?q=&status=&page=&size=` 含 total）
+6. 事件页 → 时间游标分页「加载更多」（`/api/events?before=&limit=`）
+7. 用户页 → 服务端搜索（`/api/users?q=`）
+8. 视觉 = Bootstrap + theme.css（与门户同一套）；迁移完成后 app.css/wm-* 退役
+9. 错误不再走 URL query（?err= 即丢），失败信息在 toast/页内 alert 中可见
+
+**门户（user-center :9200）**
+10. 复制订阅链接 → toast「已复制」
+11. 登录失败 → 页内 alert 且**输入不丢失**（现状 redirect 清空）
+12. 更换 token / 下单 / 退出 → toast 反馈（失败含原因）
+13. 轮询刷新带轻量视觉指示，不闪动已渲染内容
+
+**回归门（行为等价担保）**
+14. `go test` 4 模块全绿（web_test 扩展分页/编辑断言）
+15. `e2e-full` 线1+线2 ALL PASS；chaos.sh / load-50.sh 对 /api/* 旧契约断言不破（无参=全量语义保持）
+
+### 非目标（防止范围静默扩张）
+
+- 不引入前端框架/构建管线（Node/npm/htmx/Alpine 均排除，ADR-0003）
+- 不改鉴权模型（admin 单口令 + 门户 token 登录维持）
+- 不做 WebSocket/SSE 实时推送（5s 轮询维持）
+- 不做节点批量操作（批量摘除/回池）与 Marzban 用户写操作（用户页只读）
+- 不接支付网关（下单=建发票语义不变）
+- 移动端原生客户端不在本范围（"客户端界面"= 门户 Web，已澄清）
+
+### 第一个可验证切片
+
+**S1 = 上游页 CRUD 闭环 + 共享交互胶水层**：`webui/wm-ui.js`（toast/confirmAction/fetchJSON）+ Bootstrap modal/toast 基础 DOM 骨架 + 上游页（增/改/删/拉取 全走新交互）+ `POST /admin/upstreams/update` 端点 + web_test 扩展。
+选它的理由：CRUD 密度最高的一页，一次产出可复用胶水，后续 4 页纯套用；门户 toast 也吃这套胶水。
+
+## S1 执行结果 (2026-10-16)
+
+**交付**: 上游页 CRUD 闭环 + 共享交互胶水层
+- `webui/wm-ui.js`: wmToast/wmConfirm/wmAction + wmFlash(跨刷新反馈) + wmSubmitAct/wmConfirmAct(渐进增强: 无 JS 走原生表单)。经 /assets/wm-ui.js vendored 提供。
+- `webkit.WantsJSON`: X-WM-Fetch: json 协商; 动作端点双模式(JSON {ok,flash|error} / 303+?err= 兜底)。
+- ingest: 新端点 `POST /admin/upstreams/update`(store.UpdateUpstreamURL + poller.UpdateSource); add/delete/fetch/evict/recover 全部错误透明化(旧代码忽略 error)。
+- admin layout Bootstrap 化(navbar 毛玻璃/toast 宿主/confirm 宿主); 登录页同步; 未迁移页靠 app.css 过渡层不断粮。
+- 模态去 `fade`: 后台标签页 CSS transition 节流会让 Bootstrap 等不到 transitionend 弹不出框(实测踩坑)。
+
+**顺带修复的真 bug**: 删除上游复活 —— poller 内存源清单未摘除, pollOne 幂等登记把已删行写回(Poller.RemoveSource + router 调用 + TestRemoveSource 回归)。
+
+**验证**: 4 模块 vet+test PASS; e2e-full 双线 ALL PASS; chaos 全链路绿(注: 摘除风暴期 config_write 高频 → edge 15s 级重启会造成瞬时 0/20, 属池环境波动非代码回归, 稳定后复跑绿); 浏览器实跑 add→edit→delete 闭环 + 截图 `.shots/s1-*.png`、`crud-*.png`。
+
+**下一切片 S2**: 节点页(服务端搜索/过滤/分页 `/api/nodes?q=&status=&page=&size=` + 摘除/回池确认+toast) + 事件页游标分页; 之后 S3=用户页+门户 toast 集成; S4=退役 app.css/wm-*。

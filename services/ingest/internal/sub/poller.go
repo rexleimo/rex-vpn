@@ -129,9 +129,36 @@ func (p *Poller) PollOnceFor(ctx context.Context, name string) []error {
 }
 
 // AddSource 运行时新增来源(管理页"添加上游"入口), 同步登记入库。
+// 注: 运行时增改仅存本进程, 重启后以 env(SUB_UPSTREAM_*) 为准(既有语义, ADR-0004 后果)。
 func (p *Poller) AddSource(s Source) {
 	p.Sources = append(p.Sources, s)
 	p.backoff[s.Name] = 0
+}
+
+// RemoveSource 删除来源(管理页"删除上游"): 从拉取清单摘除, 防止 pollOne 幂等登记把行复活。
+func (p *Poller) RemoveSource(name string) {
+	out := p.Sources[:0]
+	for _, s := range p.Sources {
+		if s.Name != name {
+			out = append(out, s)
+		}
+	}
+	p.Sources = out
+	delete(p.backoff, name)
+	delete(p.nextRun, name)
+}
+
+// UpdateSource 编辑既有来源 URL(管理页"编辑上游"); 命中返回 true。
+func (p *Poller) UpdateSource(name, url string) bool {
+	for i := range p.Sources {
+		if p.Sources[i].Name == name {
+			p.Sources[i].URL = url
+			p.backoff[name] = 0
+			delete(p.nextRun, name) // 立即允许手动拉取
+			return true
+		}
+	}
+	return false
 }
 
 // pollOne 拉一个来源: 成功 → upsert+markstale+last_ok; 429/5xx → 退避+last_err+事件。
