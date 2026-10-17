@@ -1,0 +1,48 @@
+# CI — 全部 Go 模块的 gofmt / vet / test 门禁。
+# 模块各自独立 go.mod(matrix 枚举);新增模块时同步加入 matrix。
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - packages/subparse
+          - packages/waffo-kit
+          - client/windows
+          - services/webkit
+          - services/ingest
+          - services/user-center
+          - services/webui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: gofmt check
+        working-directory: ${{ matrix.module }}
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "以下文件未格式化:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+
+      - name: go vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+
+      - name: go test
+        working-directory: ${{ matrix.module }}
+        run: go test ./...

@@ -15,7 +15,7 @@ import (
 // Policy 客户端路由策略。
 // DirectDomains: 命中即 direct 的域名(面板/订阅域名, 精确或后缀)。
 type Policy struct {
-	Main          string   `json:"main"`   // 代理出站 tag(固定 "proxy")
+	Main          string   `json:"main"` // 代理出站 tag(固定 "proxy")
 	DirectDomains []string `json:"directDomains"`
 }
 

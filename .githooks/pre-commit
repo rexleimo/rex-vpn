@@ -1,0 +1,15 @@
+#!/bin/sh
+# pre-commit 快速门: 只对暂存的 .go 文件做 gofmt 检查(秒级, 不跑测试 —— 测试归 CI)。
+# 启用方式(每台机器一次): git config core.hooksPath .githooks
+set -e
+
+FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.go$' || true)
+[ -z "$FILES" ] && exit 0
+
+BAD=$(gofmt -l $FILES || true)
+if [ -n "$BAD" ]; then
+    echo "pre-commit: 以下文件需要 gofmt -w:"
+    echo "$BAD"
+    exit 1
+fi
+exit 0
