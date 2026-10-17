@@ -1,8 +1,11 @@
 // Package out 负责 xray-edge 配置生成与热加载触发（work-5）。
 //
 // xraygen: inbound(ws :10086) + 每个 ACTIVE 节点一个 vless outbound(tag up_<fingerprint>)
-// + 一个 freedom "selector" outbound(tag upstream_lb, leastPing) 聚合这些节点 + routing(catch-all → upstream_lb)。
-// (xray 26.10.10 实测: 顶层 balancers + routing 指向 balancer tag 会 `non existing outTag`; 改用 selector outbound。)
+// + 顶层 balancers(tag upstream_lb, leastPing, 靠 observatory 探测) 聚合节点 + routing(catch-all → balancerTag)。
+// (历史教训: 曾用 freedom+selector 伪 outbound —— 实测静默直连本机出口, 流量从未走节点;
+//
+//	顶层 balancers 报 `non existing outTag` 是因 routing 用了 outboundTag 引用 —— 正确字段是 balancerTag。2026-10-17 实测修正。)
+//
 // 原子写(.tmp+rename); 护栏: 无 ACTIVE 节点时不写新 config(保持旧池)。
 // 触发链: 状态变化 → Sync(池变化才写) → edge 容器 inotify watcher 优雅重启。
 package out
@@ -34,6 +37,7 @@ type Options struct {
 	InboundWSPath   string // "" → DefaultInboundWSPath
 	InboundClientID string // "" → DefaultInboundClientID
 	AccessLogPath   string // "" → 不记访问日志; 设路径(如 /tmp/xray-access.log)后 load-50 可按 outbound tag 聚合分流分布
+	APIListen       string // "" → DefaultAPIListen; edge 的 xray api 监听地址, 与别的面板同机部署时需改端口避让(实测 8080 撞 Marzban 面板致 edge 起不来)
 }
 
 func (o Options) withDefaults() Options {
@@ -45,6 +49,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.InboundClientID == "" {
 		o.InboundClientID = DefaultInboundClientID
+	}
+	if o.APIListen == "" {
+		o.APIListen = DefaultAPIListen
 	}
 	return o
 }
@@ -114,32 +121,44 @@ type outbound struct {
 	StreamSettings outboundStream   `json:"streamSettings"`
 }
 
-// selectorOutbound 是 xray 26.x 的负载均衡入口: 一个 freedom outbound,
-// 通过 selector 聚合多个节点 tag, 由 balancingStrategy(leastPing) 分流。
-// routing 的 outboundTag 指向本 tag(upstream_lb)。
-type selectorOutbound struct {
-	Protocol          string   `json:"protocol"`
-	Tag               string   `json:"tag"`
-	Selector          []string `json:"selector"`
-	BalancingStrategy string   `json:"balancingStrategy"`
+// balancerSec 是 xray 顶层负载均衡器: selector.tags 聚合节点 tag,
+// strategy.leastPing 依赖 observatory 探测结果选节点;
+// routing 规则用 balancerTag 引用它(用 outboundTag 会报 `non existing outTag`)。
+type balancerSec struct {
+	Tag      string      `json:"tag"`
+	Selector []string    `json:"selector"` // xray 要纯字符串数组(包成 {"tags":[]} 会报 unknown format of a string list)
+	Strategy balStrategy `json:"strategy"`
+}
+type balStrategy struct {
+	Type string `json:"type"`
+}
+
+// observatorySec 周期探测 up_* 节点的可达性/延迟, 供 leastPing 选路。
+type observatorySec struct {
+	SubjectSelector []string `json:"subjectSelector"`
+	ProbeURL        string   `json:"probeUrl"`
+	ProbeInterval   string   `json:"probeInterval"`
 }
 type routeRule struct {
 	Type        string   `json:"type"`
 	Domain      []string `json:"domain,omitempty"`
 	IP          []string `json:"ip,omitempty"`
-	OutboundTag string   `json:"outboundTag"`
+	OutboundTag string   `json:"outboundTag,omitempty"`
+	BalancerTag string   `json:"balancerTag,omitempty"`
 }
 type routingSec struct {
-	DomainStrategy string      `json:"domainStrategy"`
-	Rules          []routeRule `json:"rules"`
+	DomainStrategy string        `json:"domainStrategy"`
+	Rules          []routeRule   `json:"rules"`
+	Balancers      []balancerSec `json:"balancers,omitempty"`
 }
 type xrayConfig struct {
-	API       apiSec     `json:"api"`
-	Log       logSec     `json:"log"`
-	Inbounds  []inbound  `json:"inbounds"`
-	Outbounds []any      `json:"outbounds"` // [selectorOutbound, outbound(vless)...]
-	Routing   routingSec `json:"routing"`
-	Stats     any        `json:"stats"`
+	API         apiSec          `json:"api"`
+	Log         logSec          `json:"log"`
+	Inbounds    []inbound       `json:"inbounds"`
+	Outbounds   []any           `json:"outbounds"` // 节点 vless outbound, 每个一个
+	Observatory *observatorySec `json:"observatory,omitempty"`
+	Routing     routingSec      `json:"routing"`
+	Stats       any             `json:"stats"`
 }
 
 // streamJSON 是 parser 归一化的传输层 JSON(见 sub.streamJSON)。
@@ -156,7 +175,7 @@ type streamJSON struct {
 func Generate(nodes []db.NodeRow, opt Options) ([]byte, error) {
 	opt = opt.withDefaults()
 	cfg := xrayConfig{
-		API: apiSec{Listen: DefaultAPIListen, Tag: "api", Services: []string{"Handler", "Stats", "Routing"}},
+		API: apiSec{Listen: opt.APIListen, Tag: "api", Services: []string{"Handler", "Stats", "Routing"}},
 		Log: logSec{Access: opt.AccessLogPath, Loglevel: "warning"},
 		Inbounds: []inbound{{
 			Tag:      "in_edge_ws",
@@ -215,21 +234,24 @@ func Generate(nodes []db.NodeRow, opt Options) ([]byte, error) {
 	if len(tags) == 0 {
 		return nil, nil // 护栏: 无可用节点, 不生成(保持旧池)
 	}
-	// xray 26.x 负载均衡入口: freedom outbound 携带 selector(tag 列表) + leastPing。
-	cfg.Outbounds = append([]any{selectorOutbound{
-		Protocol:          "freedom",
-		Tag:               DefaultBalancerTag,
-		Selector:          tags,
-		BalancingStrategy: "leastPing",
-	}}, cfg.Outbounds...)
-	// xray 26.x 拒绝无匹配字段的 field 规则("no effective fields"): catch-all 拆为两条带字段的规则
-	// (域名 regexp:.* + IP 0.0.0.0/0), 均指向 selector tag, 双保险防 final 旁路。
+	// 负载均衡: routing.balancers(leastPing 需 observatory 探测) + 规则用 balancerTag 引用。
+	// 注意: balancers 必须在 routing 段内 —— 放顶层会被 xray 忽略并报 `balancer upstream_lb not found`(实测 2026-10-17)。
 	cfg.Routing = routingSec{
 		DomainStrategy: "IPIfNonMatch",
 		Rules: []routeRule{
-			{Type: "field", Domain: []string{"regexp:.*"}, OutboundTag: DefaultBalancerTag},
-			{Type: "field", IP: []string{"0.0.0.0/0"}, OutboundTag: DefaultBalancerTag},
+			{Type: "field", Domain: []string{"regexp:.*"}, BalancerTag: DefaultBalancerTag},
+			{Type: "field", IP: []string{"0.0.0.0/0"}, BalancerTag: DefaultBalancerTag},
 		},
+		Balancers: []balancerSec{{
+			Tag:      DefaultBalancerTag,
+			Selector: tags,
+			Strategy: balStrategy{Type: "leastPing"},
+		}},
+	}
+	cfg.Observatory = &observatorySec{
+		SubjectSelector: []string{"up_"},
+		ProbeURL:        "http://cp.cloudflare.com/generate_204",
+		ProbeInterval:   "60s",
 	}
 	cfg.Stats = map[string]any{}
 	return json.MarshalIndent(cfg, "", "  ")

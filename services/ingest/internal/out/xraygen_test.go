@@ -64,26 +64,33 @@ func TestGenerateStructure(t *testing.T) {
 	}
 	var cfg map[string]any
 	mustUnmarshal(t, data, &cfg)
-	if _, bad := cfg["balancers"]; bad {
-		t.Fatal("balancers 字段不应存在: xray 26.x 报 `non existing outTag`, 必须用 selector outbound")
+	// 负载均衡必须是 routing.balancers + observatory(leastPing):
+	// 旧的 freedom+selector 伪 outbound 实测静默直连(2026-10-17); 顶层 balancers 会被忽略报 `balancer not found`。
+	routing := cfg["routing"].(map[string]any)
+	bals, ok := routing["balancers"].([]any)
+	if !ok || len(bals) != 1 {
+		t.Fatalf("routing.balancers = %v, want 1 个均衡器", routing["balancers"])
+	}
+	b := bals[0].(map[string]any)
+	if b["tag"] != "upstream_lb" || b["strategy"].(map[string]any)["type"] != "leastPing" {
+		t.Fatalf("balancer = %v", b)
+	}
+	if len(b["selector"].([]any)) != 3 {
+		t.Fatalf("balancer selector = %v", b["selector"])
+	}
+	if obs, ok := cfg["observatory"].(map[string]any); !ok || obs["probeUrl"] == "" {
+		t.Fatalf("observatory 缺失(leastPing 依赖): %v", cfg["observatory"])
 	}
 	outs := cfg["outbounds"].([]any)
-	// [0] = selector 入口, 后 3 个 = vless 节点
-	sel := outs[0].(map[string]any)
-	if sel["protocol"] != "freedom" || sel["tag"] != "upstream_lb" || sel["balancingStrategy"] != "leastPing" {
-		t.Fatalf("selector outbound = %v", sel)
-	}
-	if len(sel["selector"].([]any)) != 3 {
-		t.Fatalf("selector list = %v", sel["selector"])
-	}
 	rules := cfg["routing"].(map[string]any)["rules"].([]any)
 	if len(rules) != 2 {
 		t.Fatalf("routing rules = %v", rules)
 	}
 	for i, r := range rules {
 		m := r.(map[string]any)
-		if m["outboundTag"] != "upstream_lb" {
-			t.Fatalf("rule[%d] must point to selector tag: %v", i, m)
+		// 引用均衡器必须用 balancerTag; outboundTag 会报 `non existing outTag`
+		if m["balancerTag"] != "upstream_lb" {
+			t.Fatalf("rule[%d] must use balancerTag: %v", i, m)
 		}
 		// xray 26.x: field 规则必须带有效匹配字段
 		if _, ok := m["domain"]; !ok {
@@ -92,10 +99,10 @@ func TestGenerateStructure(t *testing.T) {
 			}
 		}
 	}
-	if len(outs) != 4 {
-		t.Fatalf("outbounds = %d, want 4 (1 selector + 3 vless)", len(outs))
+	if len(outs) != 3 {
+		t.Fatalf("outbounds = %d, want 3 (纯 vless 节点, 无伪 outbound)", len(outs))
 	}
-	for i := 1; i < len(outs); i++ {
+	for i := 0; i < len(outs); i++ {
 		m := outs[i].(map[string]any)
 		if m["protocol"] != "vless" {
 			t.Fatalf("outbound[%d] protocol = %v", i, m["protocol"])

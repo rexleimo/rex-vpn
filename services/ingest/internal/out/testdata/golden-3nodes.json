@@ -38,16 +38,6 @@
   ],
   "outbounds": [
     {
-      "protocol": "freedom",
-      "tag": "upstream_lb",
-      "selector": [
-        "up_aaaabbbb00001111aaaabbbb00001111",
-        "up_ccccdddd00001111ccccdddd00001111",
-        "up_eeeeffff00001111eeeeffff00001111"
-      ],
-      "balancingStrategy": "leastPing"
-    },
-    {
       "tag": "up_aaaabbbb00001111aaaabbbb00001111",
       "protocol": "vless",
       "settings": {
@@ -138,6 +128,13 @@
       }
     }
   ],
+  "observatory": {
+    "subjectSelector": [
+      "up_"
+    ],
+    "probeUrl": "http://cp.cloudflare.com/generate_204",
+    "probeInterval": "60s"
+  },
   "routing": {
     "domainStrategy": "IPIfNonMatch",
     "rules": [
@@ -146,14 +143,27 @@
         "domain": [
           "regexp:.*"
         ],
-        "outboundTag": "upstream_lb"
+        "balancerTag": "upstream_lb"
       },
       {
         "type": "field",
         "ip": [
           "0.0.0.0/0"
         ],
-        "outboundTag": "upstream_lb"
+        "balancerTag": "upstream_lb"
+      }
+    ],
+    "balancers": [
+      {
+        "tag": "upstream_lb",
+        "selector": [
+          "up_aaaabbbb00001111aaaabbbb00001111",
+          "up_ccccdddd00001111ccccdddd00001111",
+          "up_eeeeffff00001111eeeeffff00001111"
+        ],
+        "strategy": {
+          "type": "leastPing"
+        }
       }
     ]
   },

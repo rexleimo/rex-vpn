@@ -67,6 +67,7 @@ func main() {
 	}
 	syncer := out.NewSyncer(store, envOr("EDGE_CONFIG_PATH", "/configs/config.json"), out.Options{
 		AccessLogPath: envOr("EDGE_ACCESS_LOG", ""), // 设路径后 edge 按连接记 access log; load-50 用它按 outbound tag 聚合分流
+		APIListen:     envOr("EDGE_API_LISTEN", ""), // 默认 127.0.0.1:8080; 与 Marzban 面板同机时设 18080 避让
 	})
 
 	// 订阅拉取: poller 始终构造并运行——admin 页运行时 AddSource 需要循环与手动拉取可用;
