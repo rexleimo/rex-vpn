@@ -98,9 +98,19 @@ func main() {
 		defer wg.Done()
 		addr := envOr("INGEST_API_ADDR", ":9100")
 		srv := &http.Server{Addr: addr, Handler: handler.Router()}
-		log.Printf("web: serving admin+api on %s", addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("web: %v", err)
+		go func() {
+			log.Printf("web: serving admin+api on %s", addr)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("web: %v", err)
+			}
+		}()
+		// SIGTERM 后必须主动 Shutdown: 旧版 ListenAndServe 不监视 ctx, wg.Wait 永阻塞,
+		// 进程只能被 SIGKILL(重启/Dokploy 停止都要靠超时强杀)。
+		<-ctx.Done()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutCtx); err != nil {
+			log.Printf("web shutdown: %v", err)
 		}
 	}()
 	wg.Wait()
