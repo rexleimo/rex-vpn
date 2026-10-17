@@ -20,8 +20,9 @@ const (
 
 // ProbeOutcome 是一次探测结果。
 type ProbeOutcome struct {
-	OK    bool
-	RTTMS int
+	OK      bool
+	RTTMS   int
+	CertPin string // 握手时抓到的叶子证书 sha256 hex(空=未抓到)
 }
 
 // NextStatus 给定当前状态与探测结果, 返回 (新状态, 是否发生转移)。

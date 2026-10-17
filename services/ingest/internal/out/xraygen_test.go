@@ -197,3 +197,98 @@ func mustUnmarshal(t *testing.T, data []byte, v any) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 }
+
+// trojan 节点(带 pin + claude_ok)必须生成 trojan outbound 与 claude_lb 专用均衡器;
+// 无 pin 的 trojan 跳过(xray 26 移除 allowInsecure, 无指纹不可用)。
+func TestGenerateTrojanClaudeRouting(t *testing.T) {
+	rows := append(goldenRows(),
+		db.NodeRow{
+			Fingerprint: "t1t1t1t1t1t1t1t1t1t1t1t1t1t1t1t1",
+			Address:     "oss.example.com", Port: 20001, Protocol: "trojan",
+			StreamJSON: `{"network":"tcp","user":"trojan-pw","sni":"mpvideo.qpic.cn"}`,
+			SNI:        "mpvideo.qpic.cn", Status: "active",
+			CertPin: "515197d530fc1069e4d3fecc66d75fc1", ClaudeOK: true,
+		},
+		db.NodeRow{ // 无 pin → 跳过
+			Fingerprint: "t2t2t2t2t2t2t2t2t2t2t2t2t2t2t2t2",
+			Address:     "oss2.example.com", Port: 20002, Protocol: "trojan",
+			StreamJSON: `{"network":"tcp","user":"pw2","sni":"x"}`,
+			Status:     "active",
+		},
+	)
+	data, err := Generate(rows, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	mustUnmarshal(t, data, &cfg)
+
+	outs := cfg["outbounds"].([]any)
+	if len(outs) != 4 { // 3 vless + 1 trojan(带 pin), 无 pin 的被跳过
+		t.Fatalf("outbounds = %d, want 4", len(outs))
+	}
+	var tr map[string]any
+	for _, o := range outs {
+		m := o.(map[string]any)
+		if m["protocol"] == "trojan" {
+			tr = m
+		}
+	}
+	if tr == nil {
+		t.Fatal("no trojan outbound generated")
+	}
+	srv := tr["settings"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+	if srv["password"] != "trojan-pw" || srv["port"] != float64(20001) {
+		t.Fatalf("trojan server = %v", srv)
+	}
+	tls := tr["streamSettings"].(map[string]any)["tlsSettings"].(map[string]any)
+	if tls["pinnedPeerCertSha256"] != "515197d530fc1069e4d3fecc66d75fc1" || tls["serverName"] != "mpvideo.qpic.cn" {
+		t.Fatalf("trojan tls = %v", tls)
+	}
+
+	routing := cfg["routing"].(map[string]any)
+	bals := routing["balancers"].([]any)
+	if len(bals) != 2 {
+		t.Fatalf("balancers = %d, want 2 (upstream_lb + claude_lb)", len(bals))
+	}
+	byTag := map[string]map[string]any{}
+	for _, b := range bals {
+		m := b.(map[string]any)
+		byTag[m["tag"].(string)] = m
+	}
+	if len(byTag["upstream_lb"]["selector"].([]any)) != 4 {
+		t.Fatalf("upstream_lb selector = %v", byTag["upstream_lb"]["selector"])
+	}
+	cl := byTag["claude_lb"]["selector"].([]any)
+	if len(cl) != 1 || cl[0] != "up_t1t1t1t1t1t1t1t1t1t1t1t1t1t1t1t1" {
+		t.Fatalf("claude_lb selector = %v", cl)
+	}
+	rules := routing["rules"].([]any)
+	first := rules[0].(map[string]any)
+	if first["balancerTag"] != "claude_lb" {
+		t.Fatalf("claude rule must be first: %v", first)
+	}
+	doms := first["domain"].([]any)
+	if len(doms) != len(ClaudeDomains) {
+		t.Fatalf("claude domains = %v", doms)
+	}
+	for i, r := range rules[1:] {
+		if r.(map[string]any)["balancerTag"] != "upstream_lb" {
+			t.Fatalf("rule[%d] catch-all must point upstream_lb: %v", i+1, r)
+		}
+	}
+}
+
+// 无 claude_ok 节点时不得生成 claude_lb(避免空均衡器)。
+func TestGenerateNoClaudeBalancerWithoutCapableNodes(t *testing.T) {
+	data, err := Generate(goldenRows(), Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	mustUnmarshal(t, data, &cfg)
+	bals := cfg["routing"].(map[string]any)["balancers"].([]any)
+	if len(bals) != 1 || bals[0].(map[string]any)["tag"] != "upstream_lb" {
+		t.Fatalf("balancers = %v, want only upstream_lb", bals)
+	}
+}

@@ -1,10 +1,12 @@
 // Package out 负责 xray-edge 配置生成与热加载触发（work-5）。
 //
-// xraygen: inbound(ws :10086) + 每个 ACTIVE 节点一个 vless outbound(tag up_<fingerprint>)
-// + 顶层 balancers(tag upstream_lb, leastPing, 靠 observatory 探测) 聚合节点 + routing(catch-all → balancerTag)。
-// (历史教训: 曾用 freedom+selector 伪 outbound —— 实测静默直连本机出口, 流量从未走节点;
+// xraygen: inbound(ws :10086) + 每个 ACTIVE 节点一个 outbound(vless / trojan, tag up_<fingerprint>)
+// + routing.balancers(tag upstream_lb, leastPing, 靠 observatory 探测) 聚合节点 + routing(catch-all → balancerTag)。
+// 服务感知路由: claude_ok 节点(能力探测实过 Anthropic 区域检查)另组 claude_lb,
+// claude.ai/anthropic.com 等域名优先走它 —— 存活探测测不出区域封锁(ccwu001 全池握手正常但 claude 被质询, 2026-10-17 实测)。
+// trojan 节点必须有探测回写的证书指纹(xray 26 移除 allowInsecure → pinnedPeerCertSha256), 无 pin 不入池。
 //
-//	顶层 balancers 报 `non existing outTag` 是因 routing 用了 outboundTag 引用 —— 正确字段是 balancerTag。2026-10-17 实测修正。)
+//	(历史教训: freedom+selector 伪 outbound 静默直连; 顶层 balancers 报 not found; selector 包 {tags:[]} 报格式错。2026-10-17 实测修正。)
 //
 // 原子写(.tmp+rename); 护栏: 无 ACTIVE 节点时不写新 config(保持旧池)。
 // 触发链: 状态变化 → Sync(池变化才写) → edge 容器 inotify watcher 优雅重启。
@@ -17,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"vpnmaster/ingest/internal/db"
@@ -29,7 +32,12 @@ const (
 	DefaultInboundClientID = "00000000-0000-4000-8000-000000000001"
 	DefaultBalancerTag     = "upstream_lb"
 	DefaultAPIListen       = "127.0.0.1:8080"
+	// DefaultClaudeBalancerTag claude 专用均衡器: 仅 claude_ok 节点入池(服务感知路由)。
+	DefaultClaudeBalancerTag = "claude_lb"
 )
+
+// ClaudeDomains 优先路由到 claude_lb 的域名(xray field 域名规则自带子域匹配)。
+var ClaudeDomains = []string{"claude.ai", "claude.com", "anthropic.com", "claudeusercontent.com"}
 
 // Options 覆盖 xray 生成的关键参数。
 type Options struct {
@@ -102,7 +110,14 @@ type vnextEntry struct {
 	Users   []vnextUser `json:"users"`
 }
 type outboundSettings struct {
-	Vnext []vnextEntry `json:"vnext"`
+	Vnext   []vnextEntry   `json:"vnext,omitempty"`
+	Servers []trojanServer `json:"servers,omitempty"`
+}
+type trojanServer struct {
+	Address  string `json:"address"`
+	Port     int    `json:"port"`
+	Password string `json:"password"`
+	Level    int    `json:"level"`
 }
 type outboundStream struct {
 	Network    string  `json:"network"`
@@ -111,8 +126,9 @@ type outboundStream struct {
 	WSSettings *ws     `json:"wsSettings,omitempty"`
 }
 type tlsSec struct {
-	ServerName  string `json:"serverName,omitempty"`
-	Fingerprint string `json:"fingerprint,omitempty"`
+	ServerName           string `json:"serverName,omitempty"`
+	Fingerprint          string `json:"fingerprint,omitempty"`
+	PinnedPeerCertSha256 string `json:"pinnedPeerCertSha256,omitempty"` // xray 26 移除 allowInsecure 后的替代: 叶子证书 sha256 hex
 }
 type outbound struct {
 	Tag            string           `json:"tag"`
@@ -171,7 +187,8 @@ type streamJSON struct {
 }
 
 // Generate 从 ACTIVE 节点生成 xray-edge 完整配置(5.1)。
-// 非 vless 节点跳过(日志可见), 0 个可用节点返回 (nil, nil) —— 调用方据此跳过写文件(护栏 5.3)。
+// 支持 vless 与 trojan(需探测已回写 CertPin); 其余协议跳过。0 个可用节点返回 (nil, nil) —— 调用方据此跳过写文件(护栏 5.3)。
+// claude_ok 节点额外组 claude_lb 专用均衡器, claude/anthropic 域名优先路由到它。
 func Generate(nodes []db.NodeRow, opt Options) ([]byte, error) {
 	opt = opt.withDefaults()
 	cfg := xrayConfig{
@@ -191,9 +208,10 @@ func Generate(nodes []db.NodeRow, opt Options) ([]byte, error) {
 		Outbounds: []any{}, // 首个为 selector(freedom) 入口, 其后是各节点 vless outbound; 池空时不写(护栏)
 	}
 	tags := make([]string, 0, len(nodes))
+	claudeTags := make([]string, 0, 4)
 	for _, n := range nodes {
-		if n.Protocol != "vless" {
-			// MVP 上游池为 vless+ws+tls(实测); 其他协议暂不进池
+		if n.Protocol != "vless" && n.Protocol != "trojan" {
+			// 其余协议(vmess/ss 等)暂不进池
 			continue
 		}
 		var sj streamJSON
@@ -207,27 +225,60 @@ func Generate(nodes []db.NodeRow, opt Options) ([]byte, error) {
 			netw = "tcp"
 		}
 		tag := "up_" + n.Fingerprint
-		tags = append(tags, tag)
-		ob := outbound{
-			Tag:      tag,
-			Protocol: "vless",
-			Settings: outboundSettings{Vnext: []vnextEntry{{
-				Address: n.Address,
-				Port:    n.Port,
-				Users:   []vnextUser{{ID: sj.User, Encryption: "none", Flow: ""}},
-			}}},
-			StreamSettings: outboundStream{Network: netw},
-		}
-		if sj.SNI != "" {
-			ob.StreamSettings.Security = "tls"
-			ob.StreamSettings.TLS = &tlsSec{ServerName: sj.SNI, Fingerprint: sj.Finger}
-		}
-		if netw == "ws" {
-			p := sj.WSPath
-			if p == "" {
-				p = "/"
+		var ob outbound
+		if n.Protocol == "vless" {
+			tags = append(tags, tag)
+			ob = outbound{
+				Tag:      tag,
+				Protocol: "vless",
+				Settings: outboundSettings{Vnext: []vnextEntry{{
+					Address: n.Address,
+					Port:    n.Port,
+					Users:   []vnextUser{{ID: sj.User, Encryption: "none", Flow: ""}},
+				}}},
+				StreamSettings: outboundStream{Network: netw},
 			}
-			ob.StreamSettings.WSSettings = &ws{Path: p}
+			if sj.SNI != "" {
+				ob.StreamSettings.Security = "tls"
+				ob.StreamSettings.TLS = &tlsSec{ServerName: sj.SNI, Fingerprint: sj.Finger}
+			}
+			if netw == "ws" {
+				p := sj.WSPath
+				if p == "" {
+					p = "/"
+				}
+				ob.StreamSettings.WSSettings = &ws{Path: p}
+			}
+		} else {
+			// trojan: xray 26 要求证书指纹(allowInsecure 已移除), 探测未回写 pin 前不入池;
+			// MVP 只支持 tcp+tls(WestData 实测形态), ws/grpc 变体遇到再扩。
+			if n.CertPin == "" || netw != "tcp" {
+				continue
+			}
+			sni := sj.SNI
+			if sni == "" {
+				sni = n.Address
+			}
+			finger := sj.Finger
+			if finger == "" {
+				finger = "chrome"
+			}
+			tags = append(tags, tag)
+			ob = outbound{
+				Tag:      tag,
+				Protocol: "trojan",
+				Settings: outboundSettings{Servers: []trojanServer{{
+					Address: n.Address, Port: n.Port, Password: sj.User,
+				}}},
+				StreamSettings: outboundStream{
+					Network:  "tcp",
+					Security: "tls",
+					TLS:      &tlsSec{ServerName: sni, Fingerprint: finger, PinnedPeerCertSha256: n.CertPin},
+				},
+			}
+			if n.ClaudeOK {
+				claudeTags = append(claudeTags, tag)
+			}
 		}
 		cfg.Outbounds = append(cfg.Outbounds, ob)
 	}
@@ -236,17 +287,29 @@ func Generate(nodes []db.NodeRow, opt Options) ([]byte, error) {
 	}
 	// 负载均衡: routing.balancers(leastPing 需 observatory 探测) + 规则用 balancerTag 引用。
 	// 注意: balancers 必须在 routing 段内 —— 放顶层会被 xray 忽略并报 `balancer upstream_lb not found`(实测 2026-10-17)。
+	balancers := []balancerSec{{
+		Tag:      DefaultBalancerTag,
+		Selector: tags,
+		Strategy: balStrategy{Type: "leastPing"},
+	}}
+	// catch-all 拆为两条带字段规则(26.x 拒绝无匹配字段的 field 规则), 双保险防 final 旁路。
+	rules := []routeRule{
+		{Type: "field", Domain: []string{"regexp:.*"}, BalancerTag: DefaultBalancerTag},
+		{Type: "field", IP: []string{"0.0.0.0/0"}, BalancerTag: DefaultBalancerTag},
+	}
+	if len(claudeTags) > 0 {
+		// 服务感知路由: claude/anthropic 域名 → 专用均衡器(仅 claude_ok 节点), 排在 catch-all 之前。
+		balancers = append(balancers, balancerSec{
+			Tag:      DefaultClaudeBalancerTag,
+			Selector: claudeTags,
+			Strategy: balStrategy{Type: "leastPing"},
+		})
+		rules = append([]routeRule{{Type: "field", Domain: ClaudeDomains, BalancerTag: DefaultClaudeBalancerTag}}, rules...)
+	}
 	cfg.Routing = routingSec{
 		DomainStrategy: "IPIfNonMatch",
-		Rules: []routeRule{
-			{Type: "field", Domain: []string{"regexp:.*"}, BalancerTag: DefaultBalancerTag},
-			{Type: "field", IP: []string{"0.0.0.0/0"}, BalancerTag: DefaultBalancerTag},
-		},
-		Balancers: []balancerSec{{
-			Tag:      DefaultBalancerTag,
-			Selector: tags,
-			Strategy: balStrategy{Type: "leastPing"},
-		}},
+		Rules:          rules,
+		Balancers:      balancers,
 	}
 	cfg.Observatory = &observatorySec{
 		SubjectSelector: []string{"up_"},
@@ -317,11 +380,12 @@ func (s *Syncer) Sync(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-// poolSignature ACTIVE 池的确定性签名(排序指纹拼接), 用于"变化才写"判定。
+// poolSignature ACTIVE 池的确定性签名, 用于"变化才写"判定。
+// 除指纹外还纳入证书 pin 与 claude 能力标: 它们变化同样要求重写配置(否则机场换证书/能力翻转不生效)。
 func poolSignature(rows []db.NodeRow) string {
 	sigs := make([]string, 0, len(rows))
 	for _, r := range rows {
-		sigs = append(sigs, r.Fingerprint)
+		sigs = append(sigs, r.Fingerprint+"~"+r.CertPin+"~"+strconv.FormatBool(r.ClaudeOK))
 	}
 	sort.Strings(sigs)
 	return strings.Join(sigs, "|")

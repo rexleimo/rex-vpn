@@ -2,7 +2,10 @@ package probe
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
+	"encoding/json"
 	"log"
 	"net"
 	"strconv"
@@ -20,6 +23,7 @@ type Prober struct {
 	Timeout     time.Duration // 单节点探测超时, 默认 3s
 	Workers     int           // 并发度, 默认 16
 	RetryPeriod time.Duration // evicted 节点重试周期, 默认 2m
+	CapInterval time.Duration // 能力探测节奏, 默认 10m(存活探测每轮都跑, 能力探测烧上游流量, 低频即可)
 
 	log *log.Logger
 
@@ -27,6 +31,7 @@ type Prober struct {
 	fails   map[string]int // fingerprint -> 连续失败
 	succes  map[string]int // fingerprint -> 连续成功(用于回池)
 	retryAt map[string]time.Time
+	capAt   map[string]time.Time // fingerprint -> 下次能力探测时间
 
 	// 全灭保池: 记录最后一次非空的出池指纹集, 供 xraygen 全灭兜底
 	lastHealthy []string
@@ -39,10 +44,12 @@ func NewProber(store *db.Store) *Prober {
 		Timeout:     3 * time.Second,
 		Workers:     16,
 		RetryPeriod: 2 * time.Minute,
+		CapInterval: 10 * time.Minute,
 		log:         log.New(log.Writer(), "probe: ", log.LstdFlags),
 		fails:       map[string]int{},
 		succes:      map[string]int{},
 		retryAt:     map[string]time.Time{},
+		capAt:       map[string]time.Time{},
 	}
 }
 
@@ -108,6 +115,16 @@ func (p *Prober) ProbeRound(ctx context.Context) (int, error) {
 		}
 	}
 
+	// 证书指纹回写: xray 26 移除 allowInsecure, trojan outbound 靠 pin 建 TLS;
+	// 机场换证书后下一轮探测自愈(pin 变化也会改变池签名 → 触发配置重写)。
+	for fp, res := range results {
+		if res.OK && res.CertPin != "" {
+			_ = p.Store.SetCertPin(ctx, fp, res.CertPin)
+		}
+	}
+	// 能力探测: active trojan 节点实测 Anthropic 区域签名 → claude_ok(供 claude_lb 专用均衡)。
+	p.capabilityRound(ctx)
+
 	// 全灭判定: 刷新 lastHealthy 与 degraded
 	activeFps := p.activeFingerprints(ctx)
 	if len(activeFps) > 0 {
@@ -167,8 +184,79 @@ func (p *Prober) probeOne(ctx context.Context, r db.NodeRow) ProbeOutcome {
 		return ProbeOutcome{OK: false}
 	}
 	rtt := int(time.Since(start).Milliseconds())
+	var pin string
+	if st := conn.ConnectionState(); len(st.PeerCertificates) > 0 {
+		sum := sha256.Sum256(st.PeerCertificates[0].Raw)
+		pin = hex.EncodeToString(sum[:])
+	}
 	_ = conn.Close()
-	return ProbeOutcome{OK: true, RTTMS: rtt}
+	return ProbeOutcome{OK: true, RTTMS: rtt, CertPin: pin}
+}
+
+// capabilityRound 对 ACTIVE trojan 节点做 Claude 能力探测并回写 claude_ok。
+// 探测失败(网络拖影)不改标, 避免抖动; 真死节点由存活探测剔除。
+func (p *Prober) capabilityRound(ctx context.Context) {
+	rows, err := p.Store.ListNodes(ctx, string(domain.NodeActive))
+	if err != nil {
+		return
+	}
+	var targets []db.NodeRow
+	now := time.Now()
+	for _, r := range rows {
+		// 能力探测节奏门: 新 active 节点立即探, 已探过的按 CapInterval 重探(烧上游流量, 低频即可)
+		if r.Protocol == string(domain.ProtoTrojan) && !now.Before(p.capAt[r.Fingerprint]) {
+			targets = append(targets, r)
+		}
+	}
+	if len(targets) == 0 {
+		return
+	}
+	for _, r := range targets {
+		p.capAt[r.Fingerprint] = now.Add(p.CapInterval)
+	}
+	type capRes struct {
+		fp    string
+		ok    bool
+		valid bool // false = 探测出错, 不改标
+	}
+	out := make(chan capRes, len(targets))
+	sem := make(chan struct{}, p.Workers)
+	for _, r := range targets {
+		sem <- struct{}{}
+		go func(r db.NodeRow) {
+			defer func() { <-sem }()
+			var sj struct {
+				User string `json:"user"`
+				SNI  string `json:"sni"`
+			}
+			_ = json.Unmarshal([]byte(r.StreamJSON), &sj)
+			sni := r.SNI
+			if sni == "" {
+				sni = sj.SNI
+			}
+			ok, cerr := TrojanClaudeOK(ctx, r.Address, r.Port, sj.User, sni, 10*time.Second)
+			if cerr != nil {
+				p.log.Printf("claude probe %s: %v", r.Fingerprint, cerr)
+				out <- capRes{fp: r.Fingerprint}
+				return
+			}
+			out <- capRes{fp: r.Fingerprint, ok: ok, valid: true}
+		}(r)
+	}
+	okCount := 0
+	for range targets {
+		res := <-out
+		if !res.valid {
+			continue
+		}
+		if res.ok {
+			okCount++
+		}
+		if err := p.Store.SetClaudeOK(ctx, res.fp, res.ok); err != nil {
+			p.log.Printf("set claude_ok %s: %v", res.fp, err)
+		}
+	}
+	p.log.Printf("claude capability: %d/%d trojan node(s) ok", okCount, len(targets))
 }
 
 func (p *Prober) activeFingerprints(ctx context.Context) []string {

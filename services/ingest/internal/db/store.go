@@ -44,6 +44,8 @@ type NodeRow struct {
 	Source      string // 来源 Upstream.Name
 	Status      string // domain.Node* 常量
 	LatencyMS   int
+	CertPin     string // 探测时抓到的叶子证书 sha256(hex); xray 26 移除 allowInsecure 后 trojan outbound 靠它建 TLS
+	ClaudeOK    bool   // 能力探测: 经该节点访问 Anthropic API 区域放行(供服务感知路由 claude_lb)
 	LastSeenAt  time.Time
 	StaleCount  int // 连续未出现次数, 达阈值删除
 }
@@ -241,6 +243,18 @@ func (s *Store) SetNodeStatus(ctx context.Context, fingerprint, from, to string)
 func (s *Store) SetLatency(ctx context.Context, fingerprint string, ms int) error {
 	return s.db.WithContext(ctx).Model(&NodeRow{}).Where("fingerprint = ?", fingerprint).
 		Update("latency_ms", ms).Error
+}
+
+// SetCertPin 回写探测抓到的证书指纹(xraygen trojan outbound 依赖; 机场换证书后下一轮探测自愈)。
+func (s *Store) SetCertPin(ctx context.Context, fingerprint, pin string) error {
+	return s.db.WithContext(ctx).Model(&NodeRow{}).Where("fingerprint = ?", fingerprint).
+		Update("cert_pin", pin).Error
+}
+
+// SetClaudeOK 回写能力探测结果(claude 域名专用均衡器的选池依据)。
+func (s *Store) SetClaudeOK(ctx context.Context, fingerprint string, ok bool) error {
+	return s.db.WithContext(ctx).Model(&NodeRow{}).Where("fingerprint = ?", fingerprint).
+		Update("claude_ok", ok).Error
 }
 
 // Evict 手动摘除(admin-web 按钮, 4.4): active→evicted, 记事件, 返回是否发生转移。

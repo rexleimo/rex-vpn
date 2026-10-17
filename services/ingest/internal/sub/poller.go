@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -266,7 +267,19 @@ func (p *Poller) recordErr(ctx context.Context, s Source, msg string) error {
 }
 
 // fetch GET 订阅内容, 返回 (body, statusCode, error)。非 2xx 时 body 可为空但 status 有效。
+// file:// 前缀 = 读本地文件(机场订阅 URL 被风控时的建档通道, 如 WestData 本地 clash yaml);
+// 轮询语义不变(文件被替换即生效), URL 恢复后可在 admin 编辑改回 https 自动拉取。
 func (p *Poller) fetch(ctx context.Context, url string) (string, int, error) {
+	if rest, ok := strings.CutPrefix(url, "file://"); ok {
+		if err := ctx.Err(); err != nil {
+			return "", 0, err
+		}
+		data, err := os.ReadFile(rest)
+		if err != nil {
+			return "", 0, err
+		}
+		return string(data), http.StatusOK, nil
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", 0, err
