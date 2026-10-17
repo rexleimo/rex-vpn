@@ -163,7 +163,7 @@ const pageTemplates = `
     <tbody>
     {{range .Upstreams}}
       <tr>
-        <td class="fw-semibold">{{.Name}}</td>
+        <td class="fw-semibold">{{.Name}}{{if not .Tracking}} <span class="badge text-bg-warning" title="不在本进程拉取清单: 重启后运行时添加的源会丢; 点「编辑」重填 URL 即可重新入列(持久拉取请配 SUB_UPSTREAM_*_URL)">未跟踪</span>{{end}}</td>
         <td class="wm-mono wm-muted">{{.URLMasked}}</td>
         <td>{{.NodeCount}}</td>
         <td class="wm-muted small">{{.LastOKStr}}</td>

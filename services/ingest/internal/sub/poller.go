@@ -148,6 +148,16 @@ func (p *Poller) RemoveSource(name string) {
 	delete(p.nextRun, name)
 }
 
+// HasSource 报告某来源是否在运行拉取清单内(供 admin 页标记"未跟踪"的死记录)。
+func (p *Poller) HasSource(name string) bool {
+	for _, s := range p.Sources {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // UpdateSource 编辑既有来源 URL(管理页"编辑上游"); 命中返回 true。
 func (p *Poller) UpdateSource(name, url string) bool {
 	for i := range p.Sources {

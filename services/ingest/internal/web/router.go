@@ -42,6 +42,7 @@ type UpstreamView struct {
 	LastOKStr string
 	LastErr   string
 	NodeCount int
+	Tracking  bool // 在 poller 运行清单内(DB 有行但不在清单 = 重启丢失/旧死记录, 不会被拉)
 }
 
 type NodeView struct {
@@ -219,6 +220,7 @@ func (h *Handler) upstreamView(u db.Upstream, nodeCount int64) UpstreamView {
 	return UpstreamView{
 		Name: u.Name, URLMasked: u.URLMasked,
 		LastOKStr: fmtTime(u.LastOKAt), LastErr: u.LastErr, NodeCount: int(nodeCount),
+		Tracking:  h.Poller != nil && h.Poller.HasSource(u.Name),
 	}
 }
 

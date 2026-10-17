@@ -47,7 +47,7 @@ func main() {
 		sources = append(sources, sub.Source{Name: "sub_upstream_2", URL: u})
 	}
 	if len(sources) == 0 {
-		log.Println("no SUB_UPSTREAM_*_URL set; poller idle")
+		log.Println("no SUB_UPSTREAM_*_URL set; poller 启动但暂无源(admin 页添加即生效)")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -65,12 +65,10 @@ func main() {
 		AccessLogPath: envOr("EDGE_ACCESS_LOG", ""), // 设路径后 edge 按连接记 access log; load-50 用它按 outbound tag 聚合分流
 	})
 
-	// 订阅拉取: 无来源时 poller 为 nil(管理页禁用拉取/手动按钮)
-	var poller *sub.Poller
-	if len(sources) > 0 {
-		interval, _ := time.ParseDuration(envOr("INGEST_POLL_INTERVAL", "5m"))
-		poller = sub.NewPoller(store, sources, interval)
-	}
+	// 订阅拉取: poller 始终构造并运行——admin 页运行时 AddSource 需要循环与手动拉取可用;
+	// 0 来源时仅空转无害。旧版无 env 源时 poller=nil → UI 添加上游只入库不拉取(静默死记录)。
+	interval, _ := time.ParseDuration(envOr("INGEST_POLL_INTERVAL", "5m"))
+	poller := sub.NewPoller(store, sources, interval)
 
 	// Web 层(work-7): SSR 管理页 + JSON API, 单二进制, 无前后分离
 	handler, err := web.NewHandler(store, poller, prober, syncer, web.NewMarzbanClient(), web.NewSession(envOr("INGEST_ADMIN_PASSWORD", "")))
@@ -79,15 +77,13 @@ func main() {
 	}
 
 	var wg sync.WaitGroup
-	if poller != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := poller.Run(ctx); err != nil {
-				log.Printf("poller: %v", err)
-			}
-		}()
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := poller.Run(ctx); err != nil {
+			log.Printf("poller: %v", err)
+		}
+	}()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

@@ -72,10 +72,13 @@ func (h *Handler) upstreamUpdate(c *gin.Context) {
 		replyErr(c, upsRedirect, http.StatusNotFound, "来源 "+name+" 不存在")
 		return
 	}
-	if h.Poller != nil && !h.Poller.UpdateSource(name, urlStr) {
-		// 入库已改但运行期拉取清单无此源(env 外手动添加的源重启后丢失, 既有语义)
-		replyOK(c, upsRedirect, "已更新展示, 但该来源不在拉取清单(需重新添加才能拉取)")
-		return
+	if h.Poller != nil {
+		if !h.Poller.UpdateSource(name, urlStr) {
+			h.Poller.AddSource(sub.Source{Name: name, URL: urlStr}) // 重启后运行清单丢失 → 编辑即重新入列
+			_ = h.Poller.PollOnceFor(c.Request.Context(), name)
+			replyOK(c, upsRedirect, "已更新并重新加入拉取 "+name)
+			return
+		}
 	}
 	replyOK(c, upsRedirect, "已更新 "+name)
 }
