@@ -30,15 +30,16 @@ services:
       postgres:
         condition: service_healthy
     ports:
-      - "8080:8080"   # 对外域名由 Dokploy 反代接管
+      - "8080:8080"   # 面板/API; 对外域名由 Dokploy 反代接管
+      - "2053:2053"   # 用户层入站(vless ws): 客户端直连端口, 线上同样需要发布
     restart: on-failure
 
   # ---------- 上游层 Xray (配置 100% 由 ingest 生成) ----------
-  # 用仓库内 Dockerfile: 官方 xray 镜像 + inotify 监听配置文件变化
-  # → `xray -s reload` 热加载, 不断现有用户连接
+  # 用仓库内 Dockerfile: 官方 xray 镜像 + watcher 监听配置变化
+  # → 全量变化=优雅重启; 摘除/回池= xray api rmo/ado 热更(实测 Xray 26.x 无 `-s reload`)
   xray-edge:
     build: ./edge            # deploy/edge/Dockerfile (待 ingest 一同落地)
-    # xray-edge = xray + inotify watcher → `xray -s reload` 热加载(失败则进程重启兑底, 不断用户层连接)
+    # xray-edge = xray + watcher → 配置原子 rename 触发优雅重启; rmo/ado 热更不重启
     environment:
       XRAY_CONFIG: /configs/config.json
     volumes:
@@ -58,7 +59,7 @@ services:
     env_file: .env
     environment:
       INGEST_API_ADDR: :9100
-      DB_PATH: /data/ingest.db
+      INGEST_DB_DSN: /data/ingest.db   # 代码读 INGEST_DB_DSN(旧键 DB_PATH 从未生效, 库会落容器临时层)
       EDGE_CONFIG_PATH: /configs/config.json
     ports: ["9100:9100"]
     restart: on-failure

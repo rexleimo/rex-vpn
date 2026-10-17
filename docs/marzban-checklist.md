@@ -20,7 +20,7 @@
 
 - [x] 建测试用户：`POST /api/user` **`{"username":"testuser1","expire":30,"data_limit":107374182400(100GB),"proxies":{"vless":{}}}`** + `PUT /api/user/{u}` 绑 `{"inbounds":{"vless":["VLESS WS TLS"]}}`
   - 契约坑：不建 proxies → 用户可建但 `GET` 响应校验失败("Each user needs at least one proxy")；proxies 有但 inbounds 为空 → 订阅 `proxies: []` 空节点。**必须绑 inbound 模板**
-  - 字段名是 `expire`(天)/`data_limit`(字节)，**非** `expire_in`/`limit_bytes`
+  - 字段名是 `expire`/`data_limit`(字节)，**非** `expire_in`/`limit_bytes`；**`expire` 是 unix 时间戳（0=不限时），不是天数**——2026-10-17 全栈实测纠错：传 30 被当 1970-01-01，用户秒变 `expired`、内核配置不注入 clients（表现为客户端连上但无回包）；本仓生产代码 `provision.go` 一直按 unix 秒传，未受此误记影响
 - [x] 订阅 token：`GET /api/user/{username}` → `subscription_url` = `/sub/{token}`；**无 get-tokens/renew-tokens 端点**
   - token 结构（实测解码）：`base64url("username,ceil(now)") + sha256(b64+secret)[:10]`，**本地可解码出 username**（HMAC 需 Marzban jwt 表密钥，拉取时服务端校验）
 - [x] `GET /sub/{token}` 按 **User-Agent 选格式**：`clash-verge`/`stash` → Clash YAML（节点齐全：vless uuid/ws path/sni）；`YAC`/空 UA → 空 body。`subscription-userinfo` 头带 `upload/download/total/expire`
@@ -31,6 +31,15 @@
 - [x] 实测：Marzban 自管 xray 内核（`xray_api/` 目录 + xray 进程由 Marzban 拉起/重启），**无需 SSH 外挂**；每增删用户 Marzban 重写内核配置并重启（日志 `Restarting Xray core`）
 - 结论：**用户层 = Marzban 内置 xray**（双 xray 拓扑：xray-user 即 Marzban 内核；ingest 只写 xray-edge，互不干扰，架构 §1 前提成立）
 - 未做（归 work-6.4/work-8）：用户出口指向 `xray-edge:10086`（需 xray-edge 运行 + 真实上游池；本机 xray-edge 可用本地 teddysun 镜像起，上游流量需真实 sub 凭据）
+
+## 6.4 全栈本地实机验证 ✅（2026-10-17，Mac 原生栈；Docker Hub 被拦截故走源码路线，等价 compose 拓扑）
+
+- [x] Marzban 源码(codeload tarball) + venv(py3.12, TUNA bottle) + xray-core **源码自编**(GOPROXY=goproxy.cn, darwin/arm64)；面板 :8080，CLI 建 admin
+- [x] 用户层内核配置：VLESS WS :2053 入站 + `edge-out` 出口 + routing 全量→edge-out；**坑：outbound vless 必须 `vnext` 结构，写成 inbound 的 `clients` 形态内核启动失败**
+- [x] 本地 xray-edge：`watcher-mac.sh`（mtime 轮询替代 inotify，语义同 deploy/edge/watcher.sh）；edge api 改 18080 避面板
+- [x] hosts API 改 LAN IP 后订阅节点 server=192.168.x.x（同网手机可用）；hosts 值是**列表**形态（对象形态 422）
+- [x] 客户端数据面：socks5 → user-xray(2053) → edge(10086) → internet，出口 IP 实测返回；上游池空时 edge 走 direct（出口=本机出口），池填充后由 xraygen 重写切上游
+- [ ] L3 最终断言（出口 IP = 上游节点 IP）：待真实 sub 凭据入池
 
 ## 6.5 客户端接口冒烟（user-center 契约定版）✅
 
