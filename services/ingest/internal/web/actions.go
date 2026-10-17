@@ -74,7 +74,7 @@ func (h *Handler) upstreamUpdate(c *gin.Context) {
 	}
 	if h.Poller != nil {
 		if !h.Poller.UpdateSource(name, urlStr) {
-			h.Poller.AddSource(sub.Source{Name: name, URL: urlStr}) // 重启后运行清单丢失 → 编辑即重新入列
+			h.Poller.AddSource(sub.Source{Name: name, URL: urlStr}) // 旧版遗留"未跟踪"行 → 编辑即重新入列(URL 已同步落库, 后续重启不再需要)
 			_ = h.Poller.PollOnceFor(c.Request.Context(), name)
 			replyOK(c, upsRedirect, "已更新并重新加入拉取 "+name)
 			return

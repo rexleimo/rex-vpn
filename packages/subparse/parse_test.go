@@ -1,16 +1,13 @@
-package sub
+package subparse
 
 import (
 	"encoding/base64"
 	"encoding/json"
 	"os"
-	"strconv"
 	"testing"
-
-	"vpnmaster/ingest/internal/domain"
 )
 
-// 每协议 ≥1 fixture（3.3 验收）+ base64 包裹 + 非法输入断言。
+// 每协议 ≥1 fixture(ingest work-3.3 验收搬移) + base64 包裹 + 非法输入断言。
 
 func TestParseVLESS(t *testing.T) {
 	raw := "vless://01234567-aaaa-bbbb-cccc-000000000001@example.com:443?security=tls&type=ws&host=example.com&fp=chrome&sni=example.com&path=%2Fws%2F&flow=xtls-rprx-vision#MyNode\n"
@@ -22,7 +19,7 @@ func TestParseVLESS(t *testing.T) {
 		t.Fatalf("nodes = %d, want 1", len(nodes))
 	}
 	n := nodes[0]
-	if n.Address != "example.com" || n.Port != 443 || n.Protocol != domain.ProtoVLess {
+	if n.Address != "example.com" || n.Port != 443 || n.Protocol != ProtoVLess {
 		t.Fatalf("node = %+v", n)
 	}
 	if n.Stream.User != "01234567-aaaa-bbbb-cccc-000000000001" || n.Stream.Network != "ws" {
@@ -51,7 +48,7 @@ func TestParseVMESS(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	n := nodes[0]
-	if n.Address != "vm.example.com" || n.Port != 8443 || n.Protocol != domain.ProtoVMESS || n.Stream.User != "vm-uuid-1" {
+	if n.Address != "vm.example.com" || n.Port != 8443 || n.Protocol != ProtoVMESS || n.Stream.User != "vm-uuid-1" {
 		t.Fatalf("node = %+v", n)
 	}
 	if n.Stream.SNI != "vm.example.com" || n.Stream.Network != "ws" || n.Stream.WSPath != "/vm" {
@@ -67,7 +64,7 @@ func TestParseShadowsocks(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	n := nodes[0]
-	if n.Address != "ss.example.com" || n.Port != 8388 || n.Protocol != domain.ProtoShadow {
+	if n.Address != "ss.example.com" || n.Port != 8388 || n.Protocol != ProtoShadow {
 		t.Fatalf("node = %+v", n)
 	}
 	if n.Stream.User != "aes-256-gcm:sspass" {
@@ -82,7 +79,7 @@ func TestParseTrojan(t *testing.T) {
 		t.Fatalf("Parse: %v", err)
 	}
 	n := nodes[0]
-	if n.Address != "troj.example.com" || n.Port != 443 || n.Protocol != domain.ProtoTrojan {
+	if n.Address != "troj.example.com" || n.Port != 443 || n.Protocol != ProtoTrojan {
 		t.Fatalf("node = %+v", n)
 	}
 	if n.Stream.User != "trojpass" || n.Stream.SNI != "troj.example.com" || n.Stream.WSPath != "/troj" {
@@ -114,15 +111,15 @@ func TestParseClashYAML(t *testing.T) {
 	if len(nodes) != 2 {
 		t.Fatalf("nodes = %d, want 2 (hysteria2 跳过)", len(nodes))
 	}
-	if nodes[0].Protocol != domain.ProtoVLess || nodes[0].Stream.User != "cl-uuid-1" {
+	if nodes[0].Protocol != ProtoVLess || nodes[0].Stream.User != "cl-uuid-1" {
 		t.Fatalf("node0 = %+v", nodes[0])
 	}
-	if nodes[1].Protocol != domain.ProtoShadow || nodes[1].Stream.User != "aes-256-gcm:cl-ss-pass" {
+	if nodes[1].Protocol != ProtoShadow || nodes[1].Stream.User != "aes-256-gcm:cl-ss-pass" {
 		t.Fatalf("node1 = %+v", nodes[1])
 	}
 }
 
-// 非法输入断言报错（3.3 验收）。
+// 非法输入断言报错。
 func TestParseInvalidInputs(t *testing.T) {
 	cases := []string{
 		"",
@@ -155,9 +152,10 @@ func TestParseSkipsBadLines(t *testing.T) {
 	}
 }
 
-// 3.5: 真实样本 fixture（已脱敏）: 节点数=42、字段 golden。
+// 真实样本 fixture(已脱敏): 节点数=42、字段 golden。
+// 指纹去重断言由消费方 ingest/internal/domain 承担(指纹是 ingest 的去重知识)。
 func TestRealSampleFixture(t *testing.T) {
-	raw, err := os.ReadFile("../../testdata/real-sub-vpn4zx.txt")
+	raw, err := os.ReadFile("testdata/real-sub-vpn4zx.txt")
 	if err != nil {
 		t.Fatalf("read fixture: %v", err)
 	}
@@ -168,22 +166,17 @@ func TestRealSampleFixture(t *testing.T) {
 	if len(nodes) != 42 {
 		t.Fatalf("nodes = %d, want 42", len(nodes))
 	}
-	// golden: 首个节点字段
 	n := nodes[0]
-	if n.Address != "162.159.198.1" || n.Port != 443 || n.Protocol != domain.ProtoVLess {
+	if n.Address != "162.159.198.1" || n.Port != 443 || n.Protocol != ProtoVLess {
 		t.Fatalf("golden node[0] = %+v", n)
 	}
 	if n.Stream.SNI != "vpn-4zx.pages.dev" || n.Stream.Network != "ws" || n.Stream.Finger != "chrome" {
 		t.Fatalf("golden stream[0] = %+v", n.Stream)
 	}
-	// 去重键: 脱敏后 42 行 = 14 个 distinct(addr,port) 组(共享 host/sni/path/uuid),
-	// distinct 指纹数应 == distinct addr:port 组数(同组坍缩为一个节点)
-	apSet, fpSet := map[string]bool{}, map[string]bool{}
+	// 解析层不填存储字段
 	for _, m := range nodes {
-		apSet[m.Address+":"+strconv.Itoa(m.Port)] = true
-		fpSet[domain.NewFingerprint(m)] = true
-	}
-	if len(fpSet) != len(apSet) {
-		t.Fatalf("distinct fingerprints=%d, want == distinct addr:port groups=%d", len(fpSet), len(apSet))
+		if m.ID != 0 || m.Fingerprint != "" {
+			t.Fatalf("parser must leave ID/Fingerprint zero: %+v", m)
+		}
 	}
 }

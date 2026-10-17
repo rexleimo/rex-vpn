@@ -38,17 +38,21 @@ func main() {
 	}
 	defer store.Close()
 
-	// 上游来源: SUB_UPSTREAM_1_URL / SUB_UPSTREAM_2_URL (MVP 单上游)
-	var sources []sub.Source
+	// 上游来源: env(SUB_UPSTREAM_*_URL, 权威并回写 DB) ∪ DB 持久行(admin 页添加的源)。
+	// 旧语义: UI 添加的源只活在进程内存, 重启即丢且 DB 仅存掩码无法恢复(已确认为 bug);
+	// 现在 pollOne 把完整 URL 落库, LoadSources 启动时重建清单, 无需天天重启/重填。
+	var envSrc []sub.Source
 	if u := os.Getenv("SUB_UPSTREAM_1_URL"); u != "" {
-		sources = append(sources, sub.Source{Name: "sub_upstream_1", URL: u})
+		envSrc = append(envSrc, sub.Source{Name: "sub_upstream_1", URL: u})
 	}
 	if u := os.Getenv("SUB_UPSTREAM_2_URL"); u != "" {
-		sources = append(sources, sub.Source{Name: "sub_upstream_2", URL: u})
+		envSrc = append(envSrc, sub.Source{Name: "sub_upstream_2", URL: u})
 	}
-	if len(sources) == 0 {
-		log.Println("no SUB_UPSTREAM_*_URL set; poller 启动但暂无源(admin 页添加即生效)")
+	sources, err := sub.LoadSources(context.Background(), store, envSrc)
+	if err != nil {
+		log.Fatalf("load sources: %v", err)
 	}
+	log.Printf("poller 拉取清单: %d 个源(env %d + DB %d)", len(sources), len(envSrc), len(sources)-len(envSrc))
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

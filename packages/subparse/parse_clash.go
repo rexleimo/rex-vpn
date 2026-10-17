@@ -1,23 +1,21 @@
-package sub
+package subparse
 
 import (
 	"fmt"
 
 	"gopkg.in/yaml.v3"
-
-	"vpnmaster/ingest/internal/domain"
 )
 
 // parseClashYAML 解析 Clash 订阅 yaml 的 proxies 段。
 // 仅支持本项目协议白名单(vless/vmess/shadowsocks/trojan); 其他类型节点跳过并计数。
-func parseClashYAML(content, sourceTag string) ([]domain.Node, error) {
+func parseClashYAML(content, sourceTag string) ([]Node, error) {
 	var doc struct {
 		Proxies []clashProxy `yaml:"proxies"`
 	}
 	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
 		return nil, fmt.Errorf("clash yaml: %w", err)
 	}
-	var nodes []domain.Node
+	var nodes []Node
 	skipped := 0
 	for _, p := range doc.Proxies {
 		n, ok := clashProxyToNode(p, sourceTag)
@@ -60,11 +58,11 @@ type clashProxy struct {
 	} `yaml:"ws-opts"`
 }
 
-func clashProxyToNode(p clashProxy, sourceTag string) (domain.Node, bool) {
-	switch domain.Protocol(p.Type) {
-	case domain.ProtoVLess, domain.ProtoVMESS, domain.ProtoShadow, domain.ProtoTrojan:
+func clashProxyToNode(p clashProxy, sourceTag string) (Node, bool) {
+	switch Protocol(p.Type) {
+	case ProtoVLess, ProtoVMESS, ProtoShadow, ProtoTrojan:
 	default:
-		return domain.Node{}, false
+		return Node{}, false
 	}
 	net := p.Network
 	if net == "" {
@@ -87,12 +85,12 @@ func clashProxyToNode(p clashProxy, sourceTag string) (domain.Node, bool) {
 			user = p.Method + ":" + p.Password
 		}
 	}
-	node := domain.Node{
+	node := Node{
 		Address:  p.Server,
 		Port:     p.Port,
-		Protocol: domain.Protocol(p.Type),
+		Protocol: Protocol(p.Type),
 		Tag:      orDefault(p.Name, sourceTag),
-		Stream: domain.Stream{
+		Stream: Stream{
 			User:    user,
 			Network: net,
 			SNI:     sni,

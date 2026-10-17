@@ -1,4 +1,4 @@
-package sub
+package subparse
 
 import (
 	"encoding/base64"
@@ -7,14 +7,12 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-
-	"vpnmaster/ingest/internal/domain"
 )
 
 // parseLinkList 解析逐行 "scheme://..." 纯链接订阅。
 // 支持 vless / vmess / shadowsocks / trojan; 空行与非代理行跳过, 坏行跳过并计数。
-func parseLinkList(content, sourceTag string) ([]domain.Node, error) {
-	var nodes []domain.Node
+func parseLinkList(content, sourceTag string) ([]Node, error) {
+	var nodes []Node
 	skipped := 0
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
@@ -37,7 +35,7 @@ func parseLinkList(content, sourceTag string) ([]domain.Node, error) {
 	return nodes, nil
 }
 
-func parseOneLine(line, sourceTag string) (domain.Node, bool, error) {
+func parseOneLine(line, sourceTag string) (Node, bool, error) {
 	switch {
 	case strings.HasPrefix(line, "vless://"):
 		return parseVLESS(line, sourceTag)
@@ -48,24 +46,24 @@ func parseOneLine(line, sourceTag string) (domain.Node, bool, error) {
 	case strings.HasPrefix(line, "trojan://"):
 		return parseTrojan(line, sourceTag)
 	default:
-		return domain.Node{}, false, nil
+		return Node{}, false, nil
 	}
 }
 
 // parseVLESS: vless://UUID@host:port?security=tls&type=ws&host=X&fp=chrome&sni=X&path=%2F&flow=...#tag
-func parseVLESS(line, sourceTag string) (domain.Node, bool, error) {
+func parseVLESS(line, sourceTag string) (Node, bool, error) {
 	body, frag := splitFragment(strings.TrimPrefix(line, "vless://"))
 	u, err := url.Parse("vless://" + body)
 	if err != nil {
-		return domain.Node{}, false, fmt.Errorf("vless url: %w", err)
+		return Node{}, false, fmt.Errorf("vless url: %w", err)
 	}
 	q := u.Query()
-	node := domain.Node{
+	node := Node{
 		Address:  u.Hostname(),
 		Port:     atoiDefault(u.Port(), 0),
-		Protocol: domain.ProtoVLess,
+		Protocol: ProtoVLess,
 		Tag:      orDefault(frag, sourceTag),
-		Stream: domain.Stream{
+		Stream: Stream{
 			User:    u.User.String(),
 			Network: orDefault(q.Get("type"), "tcp"),
 			Finger:  q.Get("fp"),
@@ -80,10 +78,10 @@ func parseVLESS(line, sourceTag string) (domain.Node, bool, error) {
 }
 
 // parseVMESS: vmess://BASE64(JSON{add,port,id,ps,aid,scy,net,host,path,tls,sni,fp})
-func parseVMESS(line, sourceTag string) (domain.Node, bool, error) {
+func parseVMESS(line, sourceTag string) (Node, bool, error) {
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(line, "vmess://"))
 	if err != nil {
-		return domain.Node{}, false, fmt.Errorf("vmess base64: %w", err)
+		return Node{}, false, fmt.Errorf("vmess base64: %w", err)
 	}
 	var j struct {
 		Add  string `json:"add"`
@@ -97,14 +95,14 @@ func parseVMESS(line, sourceTag string) (domain.Node, bool, error) {
 		Host string `json:"host"`
 	}
 	if err := json.Unmarshal(raw, &j); err != nil {
-		return domain.Node{}, false, fmt.Errorf("vmess json: %w", err)
+		return Node{}, false, fmt.Errorf("vmess json: %w", err)
 	}
-	node := domain.Node{
+	node := Node{
 		Address:  j.Add,
 		Port:     atoiDefault(j.Port, 0),
-		Protocol: domain.ProtoVMESS,
+		Protocol: ProtoVMESS,
 		Tag:      orDefault(j.Ps, sourceTag),
-		Stream: domain.Stream{
+		Stream: Stream{
 			User:    j.ID,
 			Network: orDefault(j.Net, "tcp"),
 			SNI:     orDefault(j.Sni, j.Host),
@@ -118,7 +116,7 @@ func parseVMESS(line, sourceTag string) (domain.Node, bool, error) {
 
 // parseShadowsocks: ss://BASE64(method:password@host:port)#tag
 // 兼容未 base64 的裸 URI 变体 ss://method:pass@host:port。
-func parseShadowsocks(line, sourceTag string) (domain.Node, bool, error) {
+func parseShadowsocks(line, sourceTag string) (Node, bool, error) {
 	body, frag := splitFragment(strings.TrimPrefix(line, "ss://"))
 	if decoded, err := base64.StdEncoding.DecodeString(body); err == nil && strings.Contains(string(decoded), "@") {
 		text := string(decoded)
@@ -135,12 +133,12 @@ func parseShadowsocks(line, sourceTag string) (domain.Node, bool, error) {
 		if h, p, ok := splitHostPort(hostport); ok {
 			host, port = h, atoiDefault(p, 0)
 		}
-		node := domain.Node{
+		node := Node{
 			Address:  host,
 			Port:     port,
-			Protocol: domain.ProtoShadow,
+			Protocol: ProtoShadow,
 			Tag:      orDefault(frag, sourceTag),
-			Stream:   domain.Stream{User: method + ":" + cred, Network: "tcp"},
+			Stream:   Stream{User: method + ":" + cred, Network: "tcp"},
 		}
 		node.Stream.StreamJSON = streamJSON(node)
 		return node, true, nil
@@ -148,36 +146,36 @@ func parseShadowsocks(line, sourceTag string) (domain.Node, bool, error) {
 	// 裸 URI 变体
 	u, err := url.Parse("ss://" + body)
 	if err != nil {
-		return domain.Node{}, false, fmt.Errorf("ss uri: %w (also not valid base64)", err)
+		return Node{}, false, fmt.Errorf("ss uri: %w (also not valid base64)", err)
 	}
 	host, port := u.Hostname(), 0
 	if h, p, ok := splitHostPort(u.Host); ok {
 		host, port = h, atoiDefault(p, 0)
 	}
-	node := domain.Node{
+	node := Node{
 		Address:  host,
 		Port:     port,
-		Protocol: domain.ProtoShadow,
+		Protocol: ProtoShadow,
 		Tag:      orDefault(frag, sourceTag),
-		Stream:   domain.Stream{User: u.User.String(), Network: "tcp"},
+		Stream:   Stream{User: u.User.String(), Network: "tcp"},
 	}
 	node.Stream.StreamJSON = streamJSON(node)
 	return node, true, nil
 }
 
 // parseTrojan: trojan://pass@host:port?security=tls&sni=X&type=ws&path=...#tag
-func parseTrojan(line, sourceTag string) (domain.Node, bool, error) {
+func parseTrojan(line, sourceTag string) (Node, bool, error) {
 	body, frag := splitFragment(strings.TrimPrefix(line, "trojan://"))
 	u, err := url.Parse("trojan://" + body)
 	if err != nil {
-		return domain.Node{}, false, fmt.Errorf("trojan url: %w", err)
+		return Node{}, false, fmt.Errorf("trojan url: %w", err)
 	}
 	q := u.Query()
-	node := domain.Node{
+	node := Node{
 		Address:  u.Hostname(),
-		Protocol: domain.ProtoTrojan,
+		Protocol: ProtoTrojan,
 		Tag:      orDefault(frag, sourceTag),
-		Stream: domain.Stream{
+		Stream: Stream{
 			User:    u.User.String(),
 			Network: orDefault(q.Get("type"), "tcp"),
 			SNI:     orDefault(q.Get("sni"), q.Get("host")),
@@ -233,8 +231,9 @@ func orDefault(v, def string) string {
 	return v
 }
 
-// streamJSON 生成 xraygen(work-5) 直填 outbound 的传输层 JSON(含协议凭证)。
-func streamJSON(n domain.Node) string {
+// streamJSON 生成 xraygen(ingest work-5) 与客户端 cfggen 直填 outbound 的
+// 传输层 JSON(含协议凭证)。
+func streamJSON(n Node) string {
 	src := map[string]any{"network": n.Stream.Network}
 	if n.Stream.User != "" {
 		src["user"] = n.Stream.User

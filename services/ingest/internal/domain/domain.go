@@ -1,5 +1,7 @@
 // Package domain 定义 ingest 的领域实体。
-// 这是最内层包: 被 db/sub/probe 依赖, 自身零外部依赖(除 stdlib)。
+// 这是最内层包: 被 db/sub/probe 依赖, 自身零外部依赖(除 stdlib + 共享 subparse)。
+// Node/Stream/Protocol 以 alias 直接采用共享解析包(subparse, ADR-0005):
+// 订阅节点的"理解方式"只存在一份权威, ingest 侧追加存储字段语义与指纹/状态机。
 package domain
 
 import (
@@ -7,16 +9,18 @@ import (
 	"encoding/hex"
 	"strconv"
 	"strings"
+
+	"vpnmaster/subparse"
 )
 
-// Protocol 是支持的代理协议族。
-type Protocol string
+// Protocol 是支持的代理协议族(权威定义 = subparse)。
+type Protocol = subparse.Protocol
 
 const (
-	ProtoVLess  Protocol = "vless"
-	ProtoVMESS  Protocol = "vmess"
-	ProtoShadow Protocol = "shadowsocks"
-	ProtoTrojan Protocol = "trojan"
+	ProtoVLess  = subparse.ProtoVLess
+	ProtoVMESS  = subparse.ProtoVMESS
+	ProtoShadow = subparse.ProtoShadow
+	ProtoTrojan = subparse.ProtoTrojan
 )
 
 // NodeStatus 是节点生命周期状态(转移逻辑归 probe 包, 状态值归本包)。
@@ -29,28 +33,12 @@ const (
 )
 
 // Stream 描述传输层配置(network/ws path/tls/sni 等), 按协议归一化。
-// StreamJSON 保留归一化后的完整传输配置(含用户凭证), 供 xraygen(work-5) 直填 outbound。
-type Stream struct {
-	Network    string `json:"network"`
-	User       string `json:"user,omitempty"` // 协议凭证: vless uuid / vmess id / ss password / trojan password
-	WSPath     string `json:"wsPath,omitempty"`
-	SNI        string `json:"sni,omitempty"`
-	Alpn       string `json:"alpn,omitempty"` // 逗号分隔
-	Finger     string `json:"fp,omitempty"`
-	StreamJSON string `json:"streamJson"`
-}
+// 权威定义与 StreamJSON 生成逻辑 = subparse。
+type Stream = subparse.Stream
 
-// Node 是归一化后的单个上游节点。
-// 去重键 Fingerprint = md5(addr|port|protocol|streamJSON|sni), 跨上游同节点自动合并。
-type Node struct {
-	ID          int64
-	Fingerprint string
-	Address     string
-	Port        int
-	Protocol    Protocol
-	Stream      Stream
-	Tag         string // 上游来源标签(如 real-sub-vpn4zx), 溯源用
-}
+// Node 是归一化后的单个上游节点(ID/Fingerprint 由存储层填充)。
+// 权威定义 = subparse; 去重键 Fingerprint = md5(addr|port|protocol|streamJSON|sni)。
+type Node = subparse.Node
 
 // NewFingerprint 计算节点去重键。
 func NewFingerprint(n Node) string {

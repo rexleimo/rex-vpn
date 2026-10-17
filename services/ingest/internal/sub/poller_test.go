@@ -11,6 +11,7 @@ import (
 
 	"vpnmaster/ingest/internal/db"
 	"vpnmaster/ingest/internal/domain"
+	"vpnmaster/subparse"
 )
 
 // newTestStore 用 temp-file sqlite, 每测试独立。
@@ -27,9 +28,9 @@ func newTestStore(t *testing.T) *db.Store {
 
 func mustParse(t *testing.T, raw, tag string) []domain.Node {
 	t.Helper()
-	nodes, err := Parse(raw, tag)
+	nodes, err := subparse.Parse(raw, tag)
 	if err != nil {
-		t.Fatalf("Parse(%q): %v", raw, err)
+		t.Fatalf("subparse.Parse(%q): %v", raw, err)
 	}
 	return nodes
 }
@@ -158,6 +159,59 @@ func TestParseSourceList(t *testing.T) {
 	}
 	if _, err := ParseSourceList(""); err == nil {
 		t.Fatal("want error for empty list")
+	}
+}
+
+// 重启恢复回归: UI 添加的源(URL 已持久)重启后从 DB 重建拉取清单;
+// env 源权威并回写 DB; 旧版只存掩码的遗留行(URL 空)跳过不复活。
+func TestLoadSources(t *testing.T) {
+	st := newTestStore(t)
+	ctx := context.Background()
+	// 模拟重启前 admin 页添加的源(经 pollOne 幂等登记落库, 含完整 URL):
+	if _, err := st.AddUpstream(ctx, "ccwu001", "https://real.example/sub?token=abc"); err != nil {
+		t.Fatal(err)
+	}
+	// 模拟旧版遗留行: 只有掩码无完整 URL(用 UpdateUpstreamURL("") 置空表达):
+	if _, err := st.AddUpstream(ctx, "legacy", "https://old.example/sub?token=x"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateUpstreamURL(ctx, "legacy", ""); err != nil {
+		t.Fatal(err)
+	}
+	// env 源: 新名 + 与 DB 同名(权威覆盖旧 URL):
+	if _, err := st.AddUpstream(ctx, "sub_upstream_1", "https://stale.example/sub?token=old"); err != nil {
+		t.Fatal(err)
+	}
+	env := []Source{{Name: "sub_upstream_1", URL: "https://env.example/sub?token=new"}, {Name: "sub_upstream_2", URL: "https://env2.example/sub"}}
+	got, err := LoadSources(ctx, st, env)
+	if err != nil {
+		t.Fatalf("LoadSources: %v", err)
+	}
+	byName := map[string]string{}
+	for _, s := range got {
+		if _, dup := byName[s.Name]; dup {
+			t.Fatalf("duplicate source %q", s.Name)
+		}
+		byName[s.Name] = s.URL
+	}
+	if len(byName) != 3 {
+		t.Fatalf("sources = %+v, want env2 + db1", byName)
+	}
+	if byName["ccwu001"] != "https://real.example/sub?token=abc" {
+		t.Fatalf("db source = %q", byName["ccwu001"])
+	}
+	if _, ok := byName["legacy"]; ok {
+		t.Fatal("legacy masked-only row must be skipped (待编辑重填)")
+	}
+	if byName["sub_upstream_1"] != "https://env.example/sub?token=new" {
+		t.Fatalf("env source must win on name collision, got %q", byName["sub_upstream_1"])
+	}
+	// env 权威回写 DB:
+	rows, _ := st.ListUpstreams(ctx)
+	for _, r := range rows {
+		if r.Name == "sub_upstream_1" && r.URL != "https://env.example/sub?token=new" {
+			t.Fatalf("env url not written back to db: %q", r.URL)
+		}
 	}
 }
 

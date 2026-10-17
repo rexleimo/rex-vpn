@@ -15,10 +15,16 @@ import (
 // 驱动可换: sqlite(默认, 纯 Go 无 CGO) → postgres(多实例时), 业务代码零改动。
 
 // Upstream 是一条上游订阅来源。
+//
+// URL 保存完整订阅链接(含 token), 使 admin 页添加的上游重启后可从 DB 重建拉取清单——
+// 旧语义"真 URL 只存 env、DB 仅掩码"会让 UI 源成为重启即丢的死记录(已确认为 bug)。
+// 敏感面不因此扩大: 同库 NodeRow.StreamJSON 本就含节点凭证; DB 文件与 env/secret
+// 同属服务器本地信任域。URLMasked 仍是唯一展示字段, admin 页/API 不回显完整 URL。
 type Upstream struct {
 	ID        int64  `gorm:"primaryKey"`
 	Name      string `gorm:"uniqueIndex"` // 来源标签(如 real-sub-vpn4zx)
-	URLMasked string // 脱敏展示(保留域名, 隐去 token); 真实 URL 只存 env/secret
+	URL       string // 完整订阅 URL(服务端持久化, 供重启重建拉取清单; 不回显)
+	URLMasked string // 脱敏展示(保留域名, 隐去 token)
 	LastOKAt  time.Time
 	LastErr   string
 	CreatedAt time.Time
@@ -97,18 +103,18 @@ func (s *Store) AddUpstream(ctx context.Context, name, rawURL string) (bool, err
 	case err != gorm.ErrRecordNotFound:
 		return false, err
 	}
-	u := Upstream{Name: name, URLMasked: maskURL(rawURL), CreatedAt: time.Now()}
+	u := Upstream{Name: name, URL: rawURL, URLMasked: maskURL(rawURL), CreatedAt: time.Now()}
 	if err := s.db.WithContext(ctx).Create(&u).Error; err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-// UpdateUpstreamURL 编辑上游 URL(仅重掩码展示; name 是 nodes.source 外键不可改)。
+// UpdateUpstreamURL 编辑上游 URL(同步更新完整 URL 与掩码展示; name 是 nodes.source 外键不可改)。
 // 返回 updated=false 表示来源不存在。
 func (s *Store) UpdateUpstreamURL(ctx context.Context, name, rawURL string) (bool, error) {
 	res := s.db.WithContext(ctx).Model(&Upstream{}).Where("name = ?", name).
-		Update("url_masked", maskURL(rawURL))
+		Updates(map[string]any{"url": rawURL, "url_masked": maskURL(rawURL)})
 	if res.Error != nil {
 		return false, res.Error
 	}

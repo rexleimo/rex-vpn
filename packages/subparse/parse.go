@@ -1,18 +1,16 @@
-package sub
+package subparse
 
 import (
 	"encoding/base64"
 	"errors"
 	"strings"
-
-	"vpnmaster/ingest/internal/domain"
 )
 
 // Parse 把订阅原始内容归一化为节点列表。
 // 支持: 纯链接列表(vless/vmess/shadowsocks/trojan) 与 Clash YAML(proxies),
 // 内容可直接是明文, 也可以是 base64 包裹(主流 sub 服务两种都见过)。
 // sourceTag 记入每个节点, 用于跨上游去重溯源。
-func Parse(raw, sourceTag string) ([]domain.Node, error) {
+func Parse(raw, sourceTag string) ([]Node, error) {
 	content := strings.TrimSpace(raw)
 	if decoded, ok := tryBase64(content); ok {
 		content = decoded

@@ -11,10 +11,12 @@ import (
 
 	"vpnmaster/ingest/internal/db"
 	"vpnmaster/ingest/internal/domain"
+	"vpnmaster/subparse"
 )
 
 // Poller 周期拉取上游订阅并落库（work-3.2）。
-// 真实 URL 只存在于配置/env, DB 里仅存掩码（db.Upstream.URLMasked）。
+// 启动清单由 LoadSources 从 env+DB 重建: UI 添加的上游完整 URL 持久在 DB,
+// 重启不再丢源(旧语义"仅 env 存活"已确认为 bug, 见 db.Upstream.URL 注释)。
 // 失败策略: 429/5xx 指数退避 1m→2m→4m 封顶; 成功回写 last_ok 并重置退避。
 // 拉取成功的一轮 = 幂等 UpsertNodes + MarkStale（连续 2 轮未出现即删, 见 store）。
 type Poller struct {
@@ -32,7 +34,7 @@ type Poller struct {
 	nextRun map[string]time.Time
 }
 
-// Source 是一个上游订阅来源。Name 入库, URL 只在本进程内存中使用。
+// Source 是一个上游订阅来源。Name 入库唯一键, URL 同步持久到 DB(db.Upstream.URL)。
 type Source struct {
 	Name string
 	URL  string
@@ -55,6 +57,37 @@ func NewPoller(store *db.Store, sources []Source, interval time.Duration) *Polle
 		backoff:        map[string]int{},
 		nextRun:        map[string]time.Time{},
 	}
+}
+
+// LoadSources 构造启动拉取清单(重启恢复的唯一真相源 = DB):
+//   - env 源(SUB_UPSTREAM_*_URL)权威优先, 并回写 DB(支持只改 env 的 token 轮换);
+//   - DB 里非 env 同名且存有完整 URL 的行(admin 页添加的)直接恢复拉取;
+//   - 旧版只存了掩码的历史行(URL 为空)跳过——admin 页显示"未跟踪",
+//     点一次"编辑"重填即永久恢复(URL 现在落库, 后续重启不再需要恢复)。
+func LoadSources(ctx context.Context, store *db.Store, env []Source) ([]Source, error) {
+	out := append([]Source{}, env...)
+	seen := map[string]bool{}
+	for _, s := range env {
+		seen[s.Name] = true
+		if _, err := store.AddUpstream(ctx, s.Name, s.URL); err != nil {
+			return nil, err
+		}
+		if _, err := store.UpdateUpstreamURL(ctx, s.Name, s.URL); err != nil {
+			return nil, err
+		}
+	}
+	rows, err := store.ListUpstreams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		if seen[r.Name] || r.URL == "" {
+			continue
+		}
+		seen[r.Name] = true
+		out = append(out, Source{Name: r.Name, URL: r.URL})
+	}
+	return out, nil
 }
 
 // backoffDelay 纯函数, 便于单测: 第 n 次(0-based)连续失败后的等待时长, 封顶 4m。
@@ -129,7 +162,7 @@ func (p *Poller) PollOnceFor(ctx context.Context, name string) []error {
 }
 
 // AddSource 运行时新增来源(管理页"添加上游"入口), 同步登记入库。
-// 注: 运行时增改仅存本进程, 重启后以 env(SUB_UPSTREAM_*) 为准(既有语义, ADR-0004 后果)。
+// 注: pollOne 会把完整 URL 落库, 重启后 LoadSources 从 DB 恢复, 不再依赖本进程存活。
 func (p *Poller) AddSource(s Source) {
 	p.Sources = append(p.Sources, s)
 	p.backoff[s.Name] = 0
@@ -195,7 +228,7 @@ func (p *Poller) pollOne(ctx context.Context, s Source) error {
 		p.nextRun[s.Name] = now.Add(p.Interval)
 	}
 
-	nodes, perr := Parse(raw, s.Name)
+	nodes, perr := subparse.Parse(raw, s.Name)
 	if perr != nil {
 		// 拉到内容但解析失败: 不当作节点消失, 只记错(退避一档, 保持旧池)
 		p.backoff[s.Name]++

@@ -220,7 +220,7 @@ func (h *Handler) upstreamView(u db.Upstream, nodeCount int64) UpstreamView {
 	return UpstreamView{
 		Name: u.Name, URLMasked: u.URLMasked,
 		LastOKStr: fmtTime(u.LastOKAt), LastErr: u.LastErr, NodeCount: int(nodeCount),
-		Tracking:  h.Poller != nil && h.Poller.HasSource(u.Name),
+		Tracking: h.Poller != nil && h.Poller.HasSource(u.Name),
 	}
 }
 

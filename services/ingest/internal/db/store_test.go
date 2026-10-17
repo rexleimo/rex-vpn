@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -155,6 +156,17 @@ func TestUpstreamCRUD(t *testing.T) {
 	}
 	if got := ups[0].URLMasked; got == "https://sub.example.com/v?token=abcdef1234567890" {
 		t.Fatal("URL not masked")
+	}
+	// 重启恢复前提: 完整 URL 持久化(URLMasked 仅作展示)。
+	if ups[0].URL != "https://sub.example.com/v?token=abcdef1234567890" {
+		t.Fatalf("full URL not persisted: %q", ups[0].URL)
+	}
+	if _, err := s.UpdateUpstreamURL(ctx, "vpn4zx", "https://sub.example.com/v?token=zzz999888777"); err != nil {
+		t.Fatal(err)
+	}
+	ups, _ = s.ListUpstreams(ctx)
+	if ups[0].URL != "https://sub.example.com/v?token=zzz999888777" || strings.Contains(ups[0].URLMasked, "zzz999888777") {
+		t.Fatalf("update url/masked mismatch: url=%q masked=%q", ups[0].URL, ups[0].URLMasked)
 	}
 	if err := s.MarkUpstreamErr(ctx, ups[0].ID, "http 429"); err != nil {
 		t.Fatal(err)

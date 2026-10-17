@@ -1,4 +1,4 @@
-// Package sub 负责上游订阅的拉取与解析（work-3）。
+// Package sub 负责上游订阅的拉取(work-3)。
 // poller: 周期拉取 sub URL，429/5xx 指数退避。
-// parser: base64(纯链接: vless/vmess/ss/trojan) 与 base64(Clash YAML) 双格式 → 归一化 domain.Node。
+// 解析归一化已抽到仓库级共享包 vpnmaster/subparse(ADR-0005), 客户端/ingest 同一权威。
 package sub
