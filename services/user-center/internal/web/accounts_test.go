@@ -23,6 +23,11 @@ type fakeAccounts struct {
 	admins map[string]bool
 	listed []accounts.AdminUser
 	ops    []string // 记录 create/ban/unban/delete/reset/grant
+
+	// 自助注册(默认关闭, 专项测试覆盖)
+	regOpen      bool
+	registerAuth accounts.Auth
+	registerErr  error
 }
 
 func (f *fakeAccounts) IsAdmin(ctx context.Context, userID string) bool { return f.admins[userID] }
@@ -60,6 +65,19 @@ func (f *fakeAccounts) Login(ctx context.Context, identifier, password, ip strin
 	}
 	return f.auth, nil
 }
+
+// Register/SelfRegistrationOpen: 默认 fake 保持既有测试语义(注册关闭)。
+// 注册路径专项测试用 regOpen/registerAuth 字段覆盖。
+func (f *fakeAccounts) Register(ctx context.Context, email, password, ip string) (accounts.Auth, error) {
+	if !f.regOpen {
+		return accounts.Auth{}, errors.New("closed")
+	}
+	if f.registerErr != nil {
+		return accounts.Auth{}, f.registerErr
+	}
+	return f.registerAuth, nil
+}
+func (f *fakeAccounts) SelfRegistrationOpen() bool { return f.regOpen }
 func (f *fakeAccounts) LinkToken(ctx context.Context, accountID string) (string, bool, error) {
 	tok, ok := f.links[accountID]
 	return tok, ok, nil
@@ -306,5 +324,42 @@ func TestNavAdminEntry(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if strings.Contains(rec.Body.String(), "/admin/users") {
 		t.Fatal("non-admin must not see admin nav")
+	}
+}
+
+// 自助注册路由: closed 时不可达; open 时注册即登录并签发 acct 会话。
+func TestSelfRegistration(t *testing.T) {
+	// closed(默认): GET/POST 都拒绝
+	srv, f := newAcctServer(t)
+	rec := httptest.NewRecorder()
+	srv.Router().ServeHTTP(rec, httptest.NewRequest("GET", "/register", nil))
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/login" {
+		t.Fatalf("closed GET /register = %d %q, want 303 /login", rec.Code, rec.Header().Get("Location"))
+	}
+
+	// open: 成功注册 → 303 /dashboard + 会话 cookie
+	f.regOpen = true
+	f.registerAuth = accounts.Auth{UserID: "u-new", Email: "new@example.com"}
+	rec = httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/register", strings.NewReader("email=NEW%40example.com&password=goodpass123"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/dashboard" {
+		t.Fatalf("open POST /register = %d %q, want 303 /dashboard", rec.Code, rec.Header().Get("Location"))
+	}
+	if !strings.Contains(rec.Header().Get("Set-Cookie"), "uc_sess") {
+		t.Fatalf("no session cookie issued")
+	}
+
+	// 校验: 短密码/坏邮箱 → 回 /register?err=
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest("POST", "/register", strings.NewReader("email=bad&password=short"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	srv.Router().ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther || !strings.Contains(rec.Header().Get("Location"), "/register?err=") {
+		t.Fatalf("bad input = %d %q, want 303 /register?err=", rec.Code, rec.Header().Get("Location"))
+	}
+	if f.registerAuth.UserID == "" {
+		t.Fatal("sanity")
 	}
 }

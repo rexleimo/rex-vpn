@@ -164,7 +164,7 @@ func SubUsername(accountID string) string {
 	if s == "" {
 		s = "acct"
 	}
-	return "uc-" + s
+	return "uc_" + s // Marzban 用户名只允许 a-z 0-9 _(实测 422 验证)
 }
 
 func accountFrom(ev *waffokit.Event) (acct, identity string) {

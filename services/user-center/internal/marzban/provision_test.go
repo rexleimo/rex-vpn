@@ -22,6 +22,11 @@ func provisionServer(t *testing.T, reply func(rec recorded, n int) (int, string)
 			_ = json.NewEncoder(w).Encode(map[string]string{"access_token": "tok123"})
 			return
 		}
+		// provision 会先拉 inbounds(本构建按协议分组响应), 不计入 recs。
+		if r.URL.Path == "/api/inbounds" {
+			_, _ = io.WriteString(w, `{"vless":[{"tag":"VLESS WS TCP","protocol":"vless"}]}`)
+			return
+		}
 		b, _ := io.ReadAll(r.Body)
 		var body map[string]any
 		_ = json.Unmarshal(b, &body)
@@ -47,9 +52,8 @@ func testClient(t *testing.T, srv *httptest.Server) Client {
 }
 
 func TestCreateUserSuccess(t *testing.T) {
-	t.Setenv("MARZBAN_INBOUND_IDS", "vmess-1, vless-2")
 	srv, recs := provisionServer(t, func(rec recorded, n int) (int, string) {
-		return 200, `{"username":"uc-abc12345","token":"TOKEN_X"}`
+		return 200, `{"username":"uc-abc12345","subscription_url":"/sub/TOKEN_X"}`
 	})
 	c := testClient(t, srv)
 	cr, err := c.CreateUser(context.Background(), UserSpec{Username: "uc-abc12345", Expire: 1800000000, DataLimit: 1 << 30})
@@ -60,7 +64,7 @@ func TestCreateUserSuccess(t *testing.T) {
 		t.Fatalf("token %q", cr.Token)
 	}
 	rec := (*recs)[0]
-	if rec.method != "POST" || rec.path != "/api/users" {
+	if rec.method != "POST" || rec.path != "/api/user" {
 		t.Fatalf("%s %s", rec.method, rec.path)
 	}
 	if rec.body["username"] != "uc-abc12345" || rec.body["status"] != "active" {
@@ -69,9 +73,18 @@ func TestCreateUserSuccess(t *testing.T) {
 	if rec.body["expire"].(float64) != 1800000000 {
 		t.Fatalf("expire %+v", rec.body["expire"])
 	}
-	ids, ok := rec.body["inbounds"].([]any)
-	if !ok || len(ids) != 2 || ids[0] != "vmess-1" {
+	// 本构建契约: proxies/inbounds 都是按协议分组字典(来自 /api/inbounds)。
+	p, ok := rec.body["proxies"].(map[string]any)
+	if !ok || len(p) != 1 {
+		t.Fatalf("proxies %+v", rec.body["proxies"])
+	}
+	ib, ok := rec.body["inbounds"].(map[string]any)
+	if !ok {
 		t.Fatalf("inbounds %+v", rec.body["inbounds"])
+	}
+	vl, ok := ib["vless"].([]any)
+	if !ok || len(vl) != 1 || vl[0] != "VLESS WS TCP" {
+		t.Fatalf("inbounds.vless %+v", ib["vless"])
 	}
 }
 
@@ -80,7 +93,7 @@ func TestCreateUserConflictFallsBackToRead(t *testing.T) {
 		if rec.method == "POST" {
 			return 409, `{}`
 		}
-		return 200, `{"username":"uc-abc12345","token":"TOKEN_OLD"}`
+		return 200, `{"username":"uc-abc12345","subscription_url":"/sub/TOKEN_OLD"}`
 	})
 	c := testClient(t, srv)
 	cr, err := c.CreateUser(context.Background(), UserSpec{Username: "uc-abc12345"})
@@ -116,7 +129,7 @@ func TestModifyUserPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := (*recs)[0]
-	if rec.method != "PUT" || rec.path != "/api/users/uc-x" {
+	if rec.method != "PUT" || rec.path != "/api/user/uc-x" {
 		t.Fatalf("%s %s", rec.method, rec.path)
 	}
 	if rec.body["expire"].(float64) != 1900000000 || rec.body["used_traffic"].(float64) != 0 {

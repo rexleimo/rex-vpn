@@ -8,6 +8,7 @@ import (
 	authkitgin "github.com/open-rails/authkit/adapters/gin"
 	"log"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"strings"
 	"vpnmaster/user-center/internal/accounts"
@@ -94,6 +95,60 @@ func (s *Server) loginAcct(c *gin.Context, jsonMode bool, replyFail func(string)
 	return true
 }
 
+// registerPage 自助注册页: 仅在账号体系启用且 UC_REGISTRATION=open 时可达。
+func (s *Server) registerPage(c *gin.Context) {
+	if s.accounts == nil || !s.accounts.SelfRegistrationOpen() {
+		c.Redirect(http.StatusSeeOther, "/login")
+		return
+	}
+	s.page(c, Page{Title: "注册", Content: "register",
+		PageData: map[string]any{"Err": c.Query("err")}})
+}
+
+// registerPost 创建账号并直接登录(authkit 注册即登录)。后续门槛由 auth()
+// 接管: 未绑定订阅的账号会被导向 /billing(启用订阅)或 /bind(旧迁移)。
+func (s *Server) registerPost(c *gin.Context) {
+	jsonMode := webkit.WantsJSON(c)
+	replyFail := func(msg string) {
+		if jsonMode {
+			c.JSON(http.StatusBadRequest, gin.H{"ok": false, "error": msg})
+			return
+		}
+		c.Redirect(http.StatusSeeOther, "/register?err="+url.QueryEscape(msg))
+	}
+	if s.accounts == nil || !s.accounts.SelfRegistrationOpen() {
+		replyFail("自助注册未开放")
+		return
+	}
+	if !s.rl.Allow(webkit.ClientIP(c.Request)) {
+		replyFail("操作过于频繁, 请稍后再试")
+		return
+	}
+	email := strings.ToLower(strings.TrimSpace(c.PostForm("email")))
+	password := c.PostForm("password")
+	if _, err := mail.ParseAddress(email); err != nil || !strings.Contains(email, "@") {
+		replyFail("请输入有效邮箱")
+		return
+	}
+	if len(password) < 8 {
+		replyFail("密码至少 8 位")
+		return
+	}
+	a, err := s.accounts.Register(c.Request.Context(), email, password, webkit.ClientIP(c.Request))
+	if err != nil {
+		s.logf("register failed %q from %s: %v", email, webkit.ClientIP(c.Request), err)
+		replyFail("注册失败: 邮箱可能已注册或密码不符合要求")
+		return
+	}
+	s.session.Revoke(c.Writer, c.Request)
+	s.session.Issue(c.Writer, acctPrefix+a.UserID)
+	if jsonMode {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "redirect": "/dashboard"})
+		return
+	}
+	c.Redirect(http.StatusSeeOther, "/dashboard")
+}
+
 // bindOnly 绑定页门槛: 必须是已登录的 acct 会话(未绑定也可进); 其他一律回 /login 或 dashboard。
 func (s *Server) bindOnly() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -161,6 +216,8 @@ func (s *Server) logf(format string, args ...any) { log.Printf(format, args...) 
 // AccountBackend 是 web 层用到的账号体系能力(可 mock, 契约测试不依赖 PG)。
 type AccountBackend interface {
 	Login(ctx context.Context, identifier, password, clientIP string) (accounts.Auth, error)
+	Register(ctx context.Context, email, password, clientIP string) (accounts.Auth, error)
+	SelfRegistrationOpen() bool
 	LinkToken(ctx context.Context, accountID string) (string, bool, error)
 	SetLink(ctx context.Context, accountID, token string) error
 	AccountEmail(ctx context.Context, accountID string) (string, error)

@@ -258,7 +258,7 @@ func TestSubUsernameStability(t *testing.T) {
 		t.Fatal("not deterministic")
 	}
 	u := SubUsername("ABC-def_123")
-	if u != "uc-abcdef123" {
+	if u != "uc_abcdef123" {
 		t.Fatalf("got %q", u)
 	}
 	if len(SubUsername(strings.Repeat("a", 100))) > 20 {

@@ -1,6 +1,7 @@
 // Provisioning: 订阅付款后由系统创建/更新 Marzban 用户。
-// 契约: POST /api/users(409 已存在→幂等回读), PUT /api/users/{username}(部分更新)。
-// inbounds 来自 MARZBAN_INBOUND_IDS(逗号分隔 tag), 未配置时回退 "all" proxies。
+// 契约(实测本构建 openapi + 源码 models/user.py): POST /api/user(409 已存在→幂等回读),
+// PUT /api/user/{username}(部分更新)。proxies/inbounds 为按协议分组字典,
+// 由 GET /api/inbounds 推导; MARZBAN_INBOUND_IDS(逗号分隔 tag)作可选白名单。
 package marzban
 
 import (
@@ -50,6 +51,43 @@ func inboundIDs() []string {
 	return out
 }
 
+// inboundsByProtocol 拉 GET /api/inbounds(本构建响应按协议分组:
+// {"vless":[{tag,protocol,...}]}), 返回协议→tag 列表。
+func (c *httpClient) inboundsByProtocol(ctx context.Context) (map[string][]string, error) {
+	adm, err := c.adminToken(ctx)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/api/inbounds", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+adm)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("marzban GET /api/inbounds: %s", resp.Status)
+	}
+	var grouped map[string][]struct {
+		Tag string `json:"tag"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&grouped); err != nil {
+		return nil, fmt.Errorf("marzban: decode inbounds: %w", err)
+	}
+	out := map[string][]string{}
+	for proto, list := range grouped {
+		for _, ib := range list {
+			if ib.Tag != "" {
+				out[proto] = append(out[proto], ib.Tag)
+			}
+		}
+	}
+	return out, nil
+}
+
 func (c *httpClient) CreateUser(ctx context.Context, spec UserSpec) (Created, error) {
 	if spec.Username == "" {
 		return Created{}, fmt.Errorf("marzban: create: empty username")
@@ -60,12 +98,40 @@ func (c *httpClient) CreateUser(ctx context.Context, spec UserSpec) (Created, er
 		"expire":     spec.Expire,
 		"data_limit": spec.DataLimit,
 	}
-	if ids := inboundIDs(); len(ids) > 0 {
-		body["inbounds"] = ids
-	} else {
-		body["proxies"] = "all"
+	// 本 Marzban 构建契约: proxies/inbounds 都是按协议分组的字典
+	// (proxies:{proto:{}}, inbounds:{proto:[tag]}); "all" 会 500。
+	ib, err := c.inboundsByProtocol(ctx)
+	if err != nil {
+		return Created{}, err
 	}
-	resp, err := c.userRequest(ctx, http.MethodPost, "/api/users", body)
+	want := inboundIDs() // 可选: 逗号分隔 tag 白名单
+	proxies := map[string]any{}
+	inbounds := map[string][]string{}
+	for proto, tags := range ib {
+		kept := tags
+		if len(want) > 0 {
+			kept = nil
+			for _, t := range tags {
+				for _, w := range want {
+					if w == t {
+						kept = append(kept, t)
+						break
+					}
+				}
+			}
+		}
+		if len(kept) == 0 {
+			continue
+		}
+		proxies[proto] = map[string]any{}
+		inbounds[proto] = kept
+	}
+	if len(proxies) == 0 {
+		return Created{}, fmt.Errorf("marzban: no matching inbounds for provisioning")
+	}
+	body["proxies"] = proxies
+	body["inbounds"] = inbounds
+	resp, err := c.userRequest(ctx, http.MethodPost, "/api/user", body)
 	if err != nil {
 		return Created{}, err
 	}
@@ -75,7 +141,7 @@ func (c *httpClient) CreateUser(ctx context.Context, spec UserSpec) (Created, er
 		return c.getUserByUsername(ctx, spec.Username)
 	}
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return Created{}, fmt.Errorf("marzban POST /api/users: %s", resp.Status)
+		return Created{}, fmt.Errorf("marzban POST /api/user: %s", resp.Status)
 	}
 	return decodeCreated(resp.Body)
 }
@@ -96,7 +162,7 @@ func (c *httpClient) ModifyUser(ctx context.Context, username string, mod UserMo
 	if mod.Status != "" {
 		body["status"] = mod.Status
 	}
-	resp, err := c.userRequest(ctx, http.MethodPut, "/api/users/"+url.PathEscape(username), body)
+	resp, err := c.userRequest(ctx, http.MethodPut, "/api/user/"+url.PathEscape(username), body)
 	if err != nil {
 		return err
 	}
@@ -105,7 +171,7 @@ func (c *httpClient) ModifyUser(ctx context.Context, username string, mod UserMo
 		return ErrNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("marzban PUT /api/users/%s: %s", username, resp.Status)
+		return fmt.Errorf("marzban PUT /api/user/%s: %s", username, resp.Status)
 	}
 	return nil
 }
@@ -156,13 +222,20 @@ func (c *httpClient) getUserByUsername(ctx context.Context, username string) (Cr
 func decodeCreated(r io.Reader) (Created, error) {
 	var j struct {
 		Username string `json:"username"`
-		Token    string `json:"token"`
+		SubURL   string `json:"subscription_url"`
 	}
 	if err := json.NewDecoder(io.LimitReader(r, 1<<20)).Decode(&j); err != nil {
 		return Created{}, fmt.Errorf("marzban: decode user: %w", err)
 	}
-	if j.Token == "" {
+	// 本构建无独立 token 字段, 订阅 token 在 subscription_url(/sub/<token>)。
+	tok := j.SubURL
+	if i := strings.Index(tok, "/sub/"); i >= 0 {
+		tok = tok[i+len("/sub/"):]
+	} else {
+		tok = ""
+	}
+	if tok == "" {
 		return Created{}, fmt.Errorf("marzban: user %q has no subscription token in response", j.Username)
 	}
-	return Created{Username: j.Username, Token: j.Token}, nil
+	return Created{Username: j.Username, Token: tok}, nil
 }

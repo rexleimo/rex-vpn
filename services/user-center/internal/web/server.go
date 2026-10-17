@@ -80,6 +80,8 @@ func (s *Server) Router() *gin.Engine {
 
 	e.GET("/", s.root)
 	e.GET("/login", s.loginPage)
+	e.GET("/register", s.registerPage) // 自助注册(仅 UC_REGISTRATION=open 可达)
+	e.POST("/register", s.registerPost)
 	e.POST("/login", s.loginPost)
 	e.POST("/logout", s.logout)
 
@@ -189,7 +191,8 @@ func (s *Server) root(c *gin.Context) {
 
 func (s *Server) loginPage(c *gin.Context) {
 	s.page(c, Page{Title: "登录", Content: "login",
-		PageData: map[string]any{"Err": c.Query("err") != "", "Accounts": s.accounts != nil}})
+		PageData: map[string]any{"Err": c.Query("err") != "", "Accounts": s.accounts != nil,
+			"RegOpen": s.accounts != nil && s.accounts.SelfRegistrationOpen()}})
 }
 
 func (s *Server) loginPost(c *gin.Context) {

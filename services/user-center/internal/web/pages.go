@@ -23,7 +23,7 @@ const userLayout = `
 <style>{{.CSS}}</style>
 </head>
 <body>
-{{if and (ne .Content "login") (ne .Content "bind")}}
+{{if and (ne .Content "login") (ne .Content "bind") (ne .Content "register")}}
 <nav class="navbar navbar-expand sticky-top wm-glass">
   <div class="container">
     <a class="navbar-brand wm-brand" href="/dashboard">我的</a>
@@ -46,6 +46,7 @@ const userLayout = `
 {{end}}
 <main class="container py-4 py-md-5" style="max-width:1080px">
 {{if eq .Content "login"}}{{template "login" .PageData}}{{end}}
+{{if eq .Content "register"}}{{template "register" .PageData}}{{end}}
 {{if eq .Content "bind"}}{{template "bind" .PageData}}{{end}}
 {{if eq .Content "adminUsers"}}{{template "adminUsers" .PageData}}{{end}}
 {{if eq .Content "pageBilling"}}{{template "pageBilling" .PageData}}{{end}}
@@ -87,12 +88,31 @@ const userLayout = `
       <input class="form-control form-control-lg" type="password" name="password" placeholder="密码" autocomplete="current-password" required>
       <button class="btn btn-primary btn-lg" type="submit">登录</button>
     </form>
+    {{if .RegOpen}}<div class="text-center mt-3 small">没有账号？<a href="/register">注册并购买订阅</a></div>{{end}}
     {{else}}
     <form method="POST" action="/login" data-wm-act="/login" class="d-grid gap-3">
       <input class="form-control form-control-lg" type="text" name="token" placeholder="订阅 token" autofocus required>
       <button class="btn btn-primary btn-lg" type="submit">登录</button>
     </form>
     {{end}}
+  </div>
+</div>
+{{end}}
+
+{{define "register"}}
+<div class="wm-auth-wrap d-flex align-items-center justify-content-center px-3">
+  <div class="card wm-auth-card p-4 p-md-5 w-100" style="max-width:420px">
+    <div class="text-center mb-4">
+      <div class="wm-display fs-3">创建账号</div>
+      <div class="wm-muted small mt-2">注册后即可购买订阅并获取节点配置</div>
+    </div>
+    {{if .Err}}<div class="alert alert-danger py-2 small" role="alert">{{.Err}}</div>{{end}}
+    <form method="POST" action="/register" data-wm-act="/register" class="d-grid gap-3">
+      <input class="form-control form-control-lg" type="email" name="email" placeholder="邮箱" autocomplete="email" autofocus required>
+      <input class="form-control form-control-lg" type="password" name="password" placeholder="密码(至少 8 位)" autocomplete="new-password" minlength="8" required>
+      <button class="btn btn-primary btn-lg" type="submit">注册</button>
+    </form>
+    <div class="text-center mt-3 small">已有账号？<a href="/login">登录</a></div>
   </div>
 </div>
 {{end}}
