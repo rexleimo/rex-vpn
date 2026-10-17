@@ -212,7 +212,11 @@ func TestAPIContracts(t *testing.T) {
 
 // 组件渲染快照(webui): layout 完整 + 关键组件存在。
 func TestWebUISnapshot(t *testing.T) {
-	h, _ := newHandler(t)
+	h, store := newHandler(t)
+	// 总览"最近事件"卡渲染 list-group 需要真数据: seed 一条事件
+	if err := store.RecordEvent(context.Background(), db.Event{Kind: "snapshot-seed", NodeFP: "", From: "pending", To: "active"}); err != nil {
+		t.Fatalf("seed event: %v", err)
+	}
 	cookie := withCookie(t, login(t, h))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("GET", "/admin", nil)
@@ -224,6 +228,8 @@ func TestWebUISnapshot(t *testing.T) {
 		`href="/assets/bootstrap.min.css"`, "navbar", "wm-glass",
 		`src="/assets/wm-ui.js?v=`, `id="wm-toasts"`, `id="wm-confirm"`,
 		"wm-display", "list-group", "总览", // S4: Bootstrap 化完成, app.css 过渡层已退役
+		// 注: "list-group" 历史上只匹中 theme.css 注入文本(空库 HTML 并无此组件)——
+		// 下方 seed 事件后断言才真正作用于 HTML; 勿再删 seed。
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("snapshot missing %q", want)

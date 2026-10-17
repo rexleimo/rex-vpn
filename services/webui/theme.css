@@ -1,95 +1,102 @@
-/* theme.css: Bootstrap 5 之上的 Apple 风主题层 (ADR-0002)。设计语言: 大留白/圆角卡片/系统字体/克制配色; 骨架用 Bootstrap 类, 微调集中在此。 */
+/* theme.css: Bootstrap 5 之上的主题层。设计语言 = Lantern 风(ADR-0007, 取代 ADR-0002 的 Apple 风):
+   暖白底/深墨绿 ink/teal 强调/黄公告条/全胶囊按钮/发丝边卡片/扁平插画语言。
+   tokens 提取自 lantern.io/zh 像素采样, 见 docs/research/lantern-tokens.md。
+   骨架仍用 Bootstrap 类, --wm-* 变量名保留(存量内联 CSS 依赖), 视觉全部换 lantern。 */
 
 :root {
-  --wm-ink: #1d1d1f;
-  --wm-ink-2: #6e6e73;
-  --wm-bg: #f5f5f7;
-  --wm-surface: #ffffff;
-  --wm-accent: #0071e3;
-  --wm-accent-hover: #0077ed;
-  --wm-hairline: rgba(0, 0, 0, .08);
-  --wm-radius-lg: 18px;
+  /* lantern tokens */
+  --wm-ink: #012d2d;          /* 标题/主按钮填充(深墨绿黑) */
+  --wm-ink-2: #60676d;        /* 次级正文灰 */
+  --wm-bg: #f8fafb;           /* 应用底/交替 section */
+  --wm-surface: #ffffff;      /* 卡片/主背景 */
+  --wm-accent: #006163;       /* teal: 链接/标签/图标 */
+  --wm-accent-hover: #00484a;
+  --wm-yellow: #ffc107;       /* 公告条/强调 */
+  --wm-cyan: #00bcd4;         /* 插画/图形强调 */
+  --wm-green: #3ab853;
+  --wm-hairline: #e8e8e8;     /* 发丝边 */
+  --wm-radius-lg: 16px;       /* 卡片 */
   --wm-radius-md: 12px;
-  --wm-shadow-soft: 0 4px 24px rgba(0, 0, 0, .06);
-  --wm-shadow-pop: 0 8px 32px rgba(0, 0, 0, .12);
+  --wm-radius-pill: 999px;    /* 按钮/胶囊 */
+  --wm-shadow-soft: none;     /* lantern 不用阴影, 靠边线 */
+  --wm-shadow-pop: 0 8px 32px rgba(1, 45, 45, .10);
 
   --bs-body-bg: var(--wm-bg);
   --bs-body-color: var(--wm-ink);
   --bs-border-color: var(--wm-hairline);
   --bs-link-color: var(--wm-accent);
   --bs-link-hover-color: var(--wm-accent-hover);
+  --bs-primary: var(--wm-ink);
+  --bs-primary-rgb: 1, 45, 45;
 
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI",
-    Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-family: "Urbanist", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", sans-serif;
 }
 
-body { background: var(--wm-bg); color: var(--wm-ink); letter-spacing: -0.01em; }
+body { letter-spacing: .01em; }
+h1, h2, h3, .h1, .h2, .h3 { font-weight: 700; color: var(--wm-ink); letter-spacing: -.01em; }
 
-/* 导航: 毛玻璃 + 细发丝线 */
-.navbar.wm-glass {
-  background: rgba(255, 255, 255, .72);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  backdrop-filter: saturate(180%) blur(20px);
+/* 导航: 白底 + 发丝下边, 弃毛玻璃 */
+.navbar, .wm-glass {
+  background: var(--wm-surface) !important;
+  backdrop-filter: none !important;
   border-bottom: 1px solid var(--wm-hairline);
+  box-shadow: none !important;
 }
-.wm-brand { font-weight: 700; letter-spacing: -0.02em; color: var(--wm-ink) !important; }
+.navbar .nav-link { color: var(--wm-ink); font-weight: 500; }
+.navbar .nav-link:hover { color: var(--wm-accent); }
+.navbar .nav-link.active { color: var(--wm-ink); font-weight: 700; }
+.navbar-brand { color: var(--wm-ink); font-weight: 700; }
+.navbar-brand::before {
+  content: ""; display: inline-block; width: .7em; height: .7em; border-radius: 50%;
+  background: var(--wm-cyan); margin-right: .45em; vertical-align: baseline;
+}
 
-/* 卡片: 无边框大圆角柔影 */
+/* 按钮: 全胶囊; 主按钮 ink 底白字 */
+.btn { border-radius: var(--wm-radius-pill); font-weight: 600; border-color: transparent; }
+.btn-primary, .btn-dark { background: var(--wm-ink); border-color: var(--wm-ink); color: #fff; }
+.btn-primary:hover, .btn-dark:hover { background: var(--wm-accent-hover); border-color: var(--wm-accent-hover); }
+.btn-outline-secondary, .btn-outline-dark {
+  color: var(--wm-ink); border-color: var(--wm-hairline); background: var(--wm-surface);
+}
+.btn-outline-secondary:hover, .btn-outline-dark:hover {
+  color: var(--wm-ink); background: var(--wm-bg); border-color: var(--wm-ink);
+}
+.btn-link { color: var(--wm-accent); }
+
+/* 卡片: 白底发丝边, 无阴影 */
 .card {
-  border: 0; border-radius: var(--wm-radius-lg);
-  background: var(--wm-surface); box-shadow: var(--wm-shadow-soft);
+  border: 1px solid var(--wm-hairline); border-radius: var(--wm-radius-lg);
+  box-shadow: none; background: var(--wm-surface);
 }
-.card-header, .card-footer { background: transparent; border-color: var(--wm-hairline); }
+.card-header { background: var(--wm-surface); border-bottom: 1px solid var(--wm-hairline); font-weight: 600; }
 
-/* 按钮: Apple 胶囊 */
-.btn { border-radius: 980px; font-weight: 500; padding-inline: 1.15rem; }
-.btn-primary { background: var(--wm-accent); border-color: var(--wm-accent); }
-.btn-primary:hover, .btn-primary:focus { background: var(--wm-accent-hover); border-color: var(--wm-accent-hover); }
-.btn-outline-secondary { border-color: var(--wm-hairline); color: var(--wm-ink); }
-.btn-outline-secondary:hover { background: rgba(0,0,0,.04); border-color: var(--wm-hairline); color: var(--wm-ink); }
+/* 列表组(总览最近事件/事件流): 发丝分隔, 去 Bootstrap 默认粗边 */
+.list-group-item {
+  border-color: var(--wm-hairline);
+  background: var(--wm-surface);
+  color: var(--wm-ink);
+}
+.list-group-flush > .list-group-item { border-left: 0; border-right: 0; border-radius: 0; }
 
-/* 表单 */
-.form-control, .input-group-text { border-radius: var(--wm-radius-md); border-color: var(--wm-hairline); }
-.form-control:focus { border-color: var(--wm-accent); box-shadow: 0 0 0 .2rem rgba(0, 113, 227, .12); }
-
-/* 进度条 */
-.progress { border-radius: 980px; background: rgba(120, 120, 128, .16); height: .65rem; }
-.progress-bar { background: var(--wm-accent); border-radius: 980px; }
-
-/* 徽章: 柔和胶囊 */
-.badge { border-radius: 980px; font-weight: 600; padding: .35em .9em; letter-spacing: 0; }
-.text-bg-success { background: #e6f7ec !important; color: #1c7c3c !important; }
-.text-bg-danger { background: #fdeceb !important; color: #c0392b !important; }
-.text-bg-warning { background: #fdf3e3 !important; color: #9a6b1f !important; }
-.text-bg-info { background: #e8f1fe !important; color: #2b5fb0 !important; }
-.text-bg-secondary { background: #ececee !important; color: #6e6e73 !important; }
-
-/* 表格: 去硬边框, 表头小字距 */
-.table { --bs-table-border-color: var(--wm-hairline); }
-.table > thead th {
-  font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
-  color: var(--wm-ink-2); border-bottom: 1px solid var(--wm-hairline);
+/* 表格/表单: 发丝分隔 */
+.table { --bs-table-border-color: var(--wm-hairline); color: var(--wm-ink); }
+.table thead th { color: var(--wm-ink-2); font-weight: 600; font-size: .85rem; letter-spacing: .04em; }
+.form-control, .form-select {
+  border-color: var(--wm-hairline); border-radius: var(--wm-radius-md); color: var(--wm-ink);
+}
+.form-control:focus, .form-select:focus {
+  border-color: var(--wm-accent); box-shadow: 0 0 0 .2rem rgba(0, 97, 99, .12); color: var(--wm-ink);
 }
 
-/* 排版层次 */
-.wm-display { font-weight: 700; letter-spacing: -0.025em; }
-.wm-muted { color: var(--wm-ink-2); }
-.wm-mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82em; }
+/* 徽章: 状态色保留语义, 形状胶囊化 */
+.badge { border-radius: var(--wm-radius-pill); font-weight: 600; }
 
-/* 列表组(指引/条目) */
-.list-group-item { border-color: var(--wm-hairline); background: transparent; }
+/* 小节标签(kicker): teal 小字距 */
+.kicker, .wm-kicker {
+  color: var(--wm-accent); font-size: .8rem; font-weight: 600;
+  letter-spacing: .08em; text-transform: none;
+}
 
-/* 登录卡: 居中浮层 */
-.wm-auth-wrap { min-height: 100vh; background:
-  radial-gradient(1200px 600px at 50% -10%, #e7f0ff 0%, var(--wm-bg) 60%); }
-.wm-auth-card { box-shadow: var(--wm-shadow-pop); border-radius: 22px; }
-
-/* 二维码容器 */
-.wm-qr { image-rendering: pixelated; border-radius: var(--wm-radius-md); }
-
-/* toast 反馈层(wm-ui.js): 语义色 + 阴影, 白底页面上必须可辨 */
-.wm-toast-success { background: #1d1d1f; color: #fff; }
-.wm-toast-danger  { background: #c4000f; color: #fff; }
-.wm-toast-info    { background: #1d1d1f; color: #fff; }
-.wm-toast-success .btn-close, .wm-toast-danger .btn-close, .wm-toast-info .btn-close { filter: invert(1) grayscale(100) brightness(2); }
-.toast-body { padding: .6rem .9rem; }
+/* 公告条(landing/门户可选用) */
+.ln-banner { background: var(--wm-yellow); color: var(--wm-ink); font-weight: 600; }

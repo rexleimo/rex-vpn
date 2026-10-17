@@ -118,7 +118,7 @@ type UsersData struct {
 
 // NewHandler 构造并解析模板。
 func NewHandler(store *db.Store, poller *sub.Poller, prober *probe.Prober, syncer *out.Syncer, mz *MarzbanClient, sess *Session) (*Handler, error) {
-	t, err := webui.ComponentsTemplate(adminLayout, pageTemplates)
+	t, err := webui.ComponentsTemplate(adminLayout, pageTemplates, landingTpl)
 	if err != nil {
 		return nil, err
 	}
@@ -146,7 +146,7 @@ func (h *Handler) Router() *gin.Engine {
 	e.POST("/login", h.loginPost)
 	e.GET("/logout", h.logout)
 	e.GET("/api/healthz", h.apiHealthz)
-	e.GET("/", func(c *gin.Context) { c.Redirect(http.StatusSeeOther, "/admin") })
+	e.GET("/", h.landing) // 产品落地页(公开); admin 在 /admin, 门户在 user-center 服务
 
 	// vendored 静态资产(零构建, 无 CDN)
 	e.GET("/assets/bootstrap.min.css", gin.WrapH(webui.AssetHandler("bootstrap.min.css")))
